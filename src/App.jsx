@@ -14,8 +14,8 @@ const fmt = (n) =>
   new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 
 const DEFAULT_ITEMS = [
-  { id: "wage",          label: "Wage",                         category: "Income",        defaultFreq: "Weekly",       isIncome: true },
-  { id: "rent",          label: "Rent",                         category: "Housing",       defaultFreq: "Weekly" },
+  { id: "wage",          label: "Wage",                         category: "Income",        defaultFreq: "Weekly",       isIncome: true, multiDate: true },
+  { id: "rent",          label: "Rent",                         category: "Housing",       defaultFreq: "Weekly",       multiDate: true },
   { id: "allianz",       label: "Allianz Car Insurance",        category: "Vehicle",       defaultFreq: "Monthly" },
   { id: "angle_auto",    label: "Angle Auto Car Loan",          category: "Vehicle",       defaultFreq: "Monthly" },
   { id: "bupa",          label: "Bupa",                         category: "Insurance",     defaultFreq: "Monthly" },
@@ -25,8 +25,8 @@ const DEFAULT_ITEMS = [
   { id: "zip",           label: "Zip",                          category: "Loans & Debt",  defaultFreq: "Monthly" },
   { id: "afterpay",      label: "Afterpay",                     category: "Loans & Debt",  defaultFreq: "Fortnightly", multiDate: true },
   { id: "latitude",      label: "Latitude",                     category: "Loans & Debt",  defaultFreq: "Monthly" },
-  { id: "personal_loan", label: "Personal Loan",                category: "Loans & Debt",  defaultFreq: "Fortnightly" },
-  { id: "savings",       label: "Savings",                      category: "Financial",     defaultFreq: "Weekly" },
+  { id: "personal_loan", label: "Personal Loan",                category: "Loans & Debt",  defaultFreq: "Fortnightly", multiDate: true },
+  { id: "savings",       label: "Savings",                      category: "Financial",     defaultFreq: "Weekly",       multiDate: true },
   { id: "apple_one",     label: "Apple One",                    category: "Subscriptions", defaultFreq: "Monthly" },
   { id: "audible",       label: "Audible",                      category: "Subscriptions", defaultFreq: "Monthly" },
   { id: "youtube",       label: "YouTube",                      category: "Subscriptions", defaultFreq: "Monthly" },
@@ -337,24 +337,28 @@ export default function BudgetTracker() {
 
                 if (item.multiDate) {
                   const apTotal = item.payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
-                  const allPaid = item.payments.length > 0 && item.payments.every(p => p.paid);
+                  const allDone = item.payments.length > 0 && item.payments.every(p => p.paid);
+                  const entryLabel = isIncome ? "Pay" : "Payment";
+                  const dateLabel = isIncome ? "Pay Date" : "Due Date";
+                  const doneLabel = isIncome ? "RECV'D" : "PAID";
                   return (
                     <div key={item.id} style={{ borderTop: idx > 0 ? "1px solid #1a1f2e" : "none" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px 6px", background: allPaid ? "rgba(74,222,128,0.04)" : "transparent" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px 6px", background: allDone ? "rgba(74,222,128,0.04)" : "transparent" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                           <span style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>{item.label}</span>
-                          <span style={{ fontSize: 10, color: "#6b7280" }}>{item.payments.length} payment{item.payments.length !== 1 ? "s" : ""}</span>
+                          {isIncome && <span style={{ fontSize: 9, fontWeight: 700, color: "#4ade80", background: "#052e16", border: "1px solid #166534", padding: "1px 5px", borderRadius: 4, letterSpacing: "0.05em" }}>INCOMING</span>}
+                          <span style={{ fontSize: 10, color: "#6b7280" }}>{item.payments.length} {entryLabel.toLowerCase()}{item.payments.length !== 1 ? "s" : ""} this month</span>
                           {apTotal > 0 && <span style={{ fontSize: 11, color: "#f9fafb", fontVariantNumeric: "tabular-nums" }}>= {fmt(apTotal)}</span>}
                         </div>
-                        <button onClick={() => addPayment(item.id)} style={{ background: "#1c0606", border: `1px solid ${meta.border}`, color: meta.color, padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Add</button>
+                        <button onClick={() => addPayment(item.id)} style={{ background: meta.bg, border: `1px solid ${meta.border}`, color: meta.color, padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Add</button>
                       </div>
                       {item.payments.map((p, pi) => (
                         <div key={p.id} style={{ padding: "8px 12px 8px 24px", background: p.paid ? "rgba(74,222,128,0.04)" : "#0a0e17", borderTop: "1px solid #1a1f2e", opacity: p.paid ? 0.6 : 1 }}>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <input type="checkbox" checked={p.paid} onChange={e => updatePayment(item.id, p.id, "paid", e.target.checked)} style={{ width: 16, height: 16, accentColor: meta.color, cursor: "pointer" }} />
-                              <span style={{ fontSize: 12, color: p.paid ? "#6b7280" : "#9ca3af", textDecoration: p.paid ? "line-through" : "none" }}>Payment {pi + 1}</span>
-                              {p.paid && <span style={{ fontSize: 10, fontWeight: 700, color: "#4ade80", background: "#052e16", padding: "1px 5px", borderRadius: 4 }}>PAID</span>}
+                              <span style={{ fontSize: 12, color: p.paid ? "#6b7280" : "#9ca3af", textDecoration: p.paid ? "line-through" : "none" }}>{entryLabel} {pi + 1}</span>
+                              {p.paid && <span style={{ fontSize: 10, fontWeight: 700, color: "#4ade80", background: "#052e16", padding: "1px 5px", borderRadius: 4 }}>{doneLabel}</span>}
                             </div>
                             {item.payments.length > 1 && (
                               <button onClick={() => removePayment(item.id, p.id)} style={{ background: "none", border: "none", color: "#6b7280", fontSize: 18, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>×</button>
@@ -371,7 +375,7 @@ export default function BudgetTracker() {
                               </div>
                             </div>
                             <div>
-                              <div style={{ fontSize: 9, color: "#4b5563", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.06em" }}>Due Date</div>
+                              <div style={{ fontSize: 9, color: "#4b5563", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.06em" }}>{dateLabel}</div>
                               <input type="date" value={p.dueDate} onChange={e => updatePayment(item.id, p.id, "dueDate", e.target.value)}
                                 style={{ width: "100%", padding: "8px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: p.dueDate ? "#f9fafb" : "#4b5563", fontSize: 13, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
                                 onFocus={e => e.target.style.borderColor = meta.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
