@@ -47,7 +47,7 @@ const CATEGORY_COLORS = {
   "Personal":      { color: "#fb923c", bg: "#1c0f00", border: "#9a3412" },
 };
 
-const newPayment = () => ({ id: Date.now() + Math.random(), amount: "", dueDate: "", paid: false });
+const newPayment = () => ({ id: Date.now().toString() + Math.floor(Math.random() * 10000).toString(), amount: "", dueDate: "", paid: false });
 
 const getMonthKey = (date) => date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0");
 const getMonthLabel = (key) => {
@@ -141,7 +141,7 @@ export default function BudgetTracker() {
         setSyncStatus(res.ok ? "saved" : "error");
       } catch { setSyncStatus("error"); }
       setTimeout(() => setSyncStatus(""), 2000);
-    }, 1500);
+    }, 800);
     return () => clearTimeout(timer);
   }, [allMonths, syncCode]);
 
