@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 
 const FREQUENCY_OPTIONS = ["Weekly", "Fortnightly", "Monthly"];
 
@@ -127,7 +127,8 @@ export default function BudgetTracker() {
   const [syncCode, setSyncCode] = useState(loadSyncCode);
   const [syncInput, setSyncInput] = useState(loadSyncCode);
   const [showSync, setShowSync] = useState(false);
-  const [syncStatus, setSyncStatus] = useState(""); // "", "saving", "saved", "loading", "error"
+  const [syncStatus, setSyncStatus] = useState("");
+  const isSavingFromCloud = useRef(false);
 
   const items = allMonths[currentKey] || buildFreshItems(DEFAULT_ITEMS);
 
@@ -136,9 +137,10 @@ export default function BudgetTracker() {
     saveStorage(allMonths);
   }, [allMonths]);
 
-  // Auto-save to cloud whenever allMonths changes (debounced)
+  // Auto-save to cloud whenever allMonths changes (debounced, skip if we just loaded from cloud)
   useEffect(() => {
     if (!syncCode) return;
+    if (isSavingFromCloud.current) return;
     setSyncStatus("saving");
     const timer = setTimeout(async () => {
       try {
@@ -155,21 +157,28 @@ export default function BudgetTracker() {
     return () => clearTimeout(timer);
   }, [allMonths, syncCode]);
 
-  // Load from cloud on startup if sync code exists
-  useEffect(() => {
-    if (!syncCode) return;
+  // Load from cloud
+  const loadFromCloud = (code) => {
     setSyncStatus("loading");
-    fetch(`/api/load?syncCode=${encodeURIComponent(syncCode)}`)
+    fetch(`/api/load?syncCode=${encodeURIComponent(code)}`)
       .then(r => r.json())
       .then(data => {
-        if (data) {
+        if (data && typeof data === "object" && Object.keys(data).length > 0) {
+          isSavingFromCloud.current = true;
           setAllMonths(data);
           saveStorage(data);
+          setTimeout(() => { isSavingFromCloud.current = false; }, 2000);
         }
         setSyncStatus("saved");
         setTimeout(() => setSyncStatus(""), 2000);
       })
       .catch(() => setSyncStatus("error"));
+  };
+
+  // Load from cloud on startup if sync code exists
+  useEffect(() => {
+    if (!syncCode) return;
+    loadFromCloud(syncCode);
   }, [syncCode]);
 
   const applySyncCode = () => {
@@ -308,23 +317,46 @@ export default function BudgetTracker() {
 
         {/* Header */}
         <div style={{ marginBottom: 24 }}>
-          <div style={{ fontSize: 10, letterSpacing: "0.14em", color: "#6b7280", textTransform: "uppercase", marginBottom: 6 }}>Monthly Budget Tracker</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <button onClick={() => setShowMonthPicker(!showMonthPicker)} style={{
-              background: "none", border: "1.5px solid #374151", borderRadius: 10,
-              color: "#f9fafb", padding: "6px 14px", fontSize: 24, fontWeight: 800,
-              cursor: "pointer", fontFamily: "inherit", letterSpacing: "-0.02em",
-              display: "flex", alignItems: "center", gap: 8,
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontSize: 10, letterSpacing: "0.14em", color: "#6b7280", textTransform: "uppercase", marginBottom: 6 }}>Monthly Budget Tracker</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <button onClick={() => setShowMonthPicker(!showMonthPicker)} style={{
+                  background: "none", border: "1.5px solid #374151", borderRadius: 10,
+                  color: "#f9fafb", padding: "6px 14px", fontSize: 24, fontWeight: 800,
+                  cursor: "pointer", fontFamily: "inherit", letterSpacing: "-0.02em",
+                  display: "flex", alignItems: "center", gap: 8,
+                }}>
+                  {getMonthLabel(currentKey)}
+                  <span style={{ fontSize: 14, color: "#6b7280" }}>▾</span>
+                </button>
+                {!isCurrentMonth && (
+                  <button onClick={() => switchMonth(todayKey)} style={{
+                    background: "#1f2937", border: "1px solid #374151", borderRadius: 8,
+                    color: "#9ca3af", padding: "5px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+                  }}>← Today</button>
+                )}
+              </div>
+            </div>
+            {/* Sync icon button — myshelf style */}
+            <button onClick={() => { setSyncInput(syncCode); setShowSync(!showSync); }} style={{
+              display: "flex", alignItems: "center", gap: 7,
+              background: "#1a1f2e", border: "1.5px solid #2d3748",
+              borderRadius: 20, padding: "8px 14px",
+              cursor: "pointer", marginTop: 2, flexShrink: 0,
             }}>
-              {getMonthLabel(currentKey)}
-              <span style={{ fontSize: 14, color: "#6b7280" }}>▾</span>
+              <span style={{
+                width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+                background: syncStatus === "error" ? "#ef4444" : (syncStatus === "saving" || syncStatus === "loading") ? "#fbbf24" : syncCode ? "#4ade80" : "#374151",
+                boxShadow: syncCode && syncStatus !== "error" ? "0 0 6px #4ade80" : "none",
+              }} />
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={syncCode ? "#a78bfa" : "#6b7280"} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 2v6h-6" />
+                <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+                <path d="M3 22v-6h6" />
+                <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+              </svg>
             </button>
-            {!isCurrentMonth && (
-              <button onClick={() => switchMonth(todayKey)} style={{
-                background: "#1f2937", border: "1px solid #374151", borderRadius: 8,
-                color: "#9ca3af", padding: "5px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
-              }}>← Today</button>
-            )}
           </div>
 
           {/* Month Picker Dropdown */}
@@ -342,57 +374,58 @@ export default function BudgetTracker() {
             </div>
           )}
 
-          <div style={{ fontSize: 13, color: "#6b7280", marginTop: 6, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span>{paidCount} of {items.length} payments marked as paid</span>
-            {syncCode ? (
-              <span style={{ fontSize: 11, color: syncStatus === "error" ? "#ef4444" : syncStatus === "saving" ? "#fbbf24" : "#4ade80" }}>
-                ● {syncStatus === "saving" ? "Syncing..." : syncStatus === "error" ? "Sync error" : syncStatus === "loading" ? "Loading..." : "Synced"}
-              </span>
-            ) : (
-              <span style={{ fontSize: 11, color: "#4ade80" }}>● Auto-saving</span>
-            )}
-            <button onClick={() => { setSyncInput(syncCode); setShowSync(!showSync); }} style={{
-              background: syncCode ? "#082f49" : "#1f2937",
-              border: `1px solid ${syncCode ? "#075985" : "#374151"}`,
-              color: syncCode ? "#38bdf8" : "#9ca3af",
-              padding: "3px 10px", borderRadius: 6, fontSize: 11,
-              fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-            }}>
-              {syncCode ? "⚙ Sync On" : "⚙ Set Sync"}
-            </button>
+          <div style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>
+            {paidCount} of {items.length} payments marked as paid
+            {!syncCode && <span style={{ marginLeft: 10, fontSize: 11, color: "#4ade80" }}>● Auto-saving</span>}
+            {syncCode && <span style={{ marginLeft: 10, fontSize: 11, color: syncStatus === "error" ? "#ef4444" : syncStatus === "saving" || syncStatus === "loading" ? "#fbbf24" : "#4ade80" }}>
+              ● {syncStatus === "saving" ? "Syncing..." : syncStatus === "loading" ? "Loading..." : syncStatus === "error" ? "Sync error" : "Synced"}
+            </span>}
           </div>
 
           {/* Sync Panel */}
           {showSync && (
-            <div style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 12, padding: 14, marginTop: 10 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#f9fafb", marginBottom: 6 }}>Cross-device Sync</div>
-              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+            <div style={{ background: "#111827", border: "1px solid #2d3748", borderRadius: 14, padding: 16, marginTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#f9fafb", marginBottom: 4 }}>Cross-device Sync</div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
                 Enter the same sync code on all your devices to keep data in sync.
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <input
                   value={syncInput}
                   onChange={e => setSyncInput(e.target.value)}
-                  placeholder="Enter a sync code e.g. james-budget-2026"
+                  placeholder="e.g. james-budget-2026"
                   style={{
-                    flex: 1, minWidth: 180, padding: "8px 12px",
+                    flex: 1, minWidth: 160, padding: "8px 12px",
                     background: "#0f172a", border: "1px solid #374151",
                     borderRadius: 8, color: "#f9fafb", fontSize: 13,
                     fontFamily: "inherit", outline: "none",
                   }}
                 />
                 <button onClick={applySyncCode} style={{
-                  background: "#075985", border: "1px solid #38bdf8",
-                  color: "#38bdf8", padding: "8px 16px", borderRadius: 8,
+                  background: "#3b0764", border: "1.5px solid #a78bfa",
+                  color: "#a78bfa", padding: "8px 16px", borderRadius: 8,
                   fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
                 }}>Save</button>
                 {syncCode && (
+                  <button onClick={() => loadFromCloud(syncCode)} style={{
+                    background: "#052e16", border: "1.5px solid #4ade80",
+                    color: "#4ade80", padding: "8px 14px", borderRadius: 8,
+                    fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                  }}>↓ Pull</button>
+                )}
+                {syncCode && (
                   <button onClick={clearSyncCode} style={{
                     background: "none", border: "1px solid #374151",
-                    color: "#6b7280", padding: "8px 16px", borderRadius: 8,
+                    color: "#6b7280", padding: "8px 14px", borderRadius: 8,
                     fontSize: 13, cursor: "pointer", fontFamily: "inherit",
                   }}>Disable</button>
                 )}
+              </div>
+              {syncCode && (
+                <div style={{ fontSize: 11, color: "#4b5563", marginTop: 10 }}>
+                  Active code: <span style={{ color: "#a78bfa" }}>{syncCode}</span>
+                </div>
+              )}
               </div>
             </div>
           )}
