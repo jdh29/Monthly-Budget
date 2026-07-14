@@ -328,17 +328,17 @@ export default function BudgetTracker() {
                   display: "flex", alignItems: "center", gap: 8,
                 }}>
                   {getMonthLabel(currentKey)}
-                  <span style={{ fontSize: 14, color: "#6b7280" }}>▾</span>
+                  <span style={{ fontSize: 14, color: "#6b7280" }}>v</span>
                 </button>
                 {!isCurrentMonth && (
                   <button onClick={() => switchMonth(todayKey)} style={{
                     background: "#1f2937", border: "1px solid #374151", borderRadius: 8,
                     color: "#9ca3af", padding: "5px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
-                  }}>← Today</button>
+                  }}><- Today</button>
                 )}
               </div>
             </div>
-            {/* Sync icon button — myshelf style */}
+            {/* Sync icon button - myshelf style */}
             <button onClick={() => { setSyncInput(syncCode); setShowSync(!showSync); }} style={{
               display: "flex", alignItems: "center", gap: 7,
               background: "#1a1f2e", border: "1.5px solid #2d3748",
@@ -376,9 +376,9 @@ export default function BudgetTracker() {
 
           <div style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>
             {paidCount} of {items.length} payments marked as paid
-            {!syncCode && <span style={{ marginLeft: 10, fontSize: 11, color: "#4ade80" }}>● Auto-saving</span>}
+            {!syncCode && <span style={{ marginLeft: 10, fontSize: 11, color: "#4ade80" }}>* Auto-saving</span>}
             {syncCode && <span style={{ marginLeft: 10, fontSize: 11, color: syncStatus === "error" ? "#ef4444" : syncStatus === "saving" || syncStatus === "loading" ? "#fbbf24" : "#4ade80" }}>
-              ● {syncStatus === "saving" ? "Syncing..." : syncStatus === "loading" ? "Loading..." : syncStatus === "error" ? "Sync error" : "Synced"}
+              * {syncStatus === "saving" ? "Syncing..." : syncStatus === "loading" ? "Loading..." : syncStatus === "error" ? "Sync error" : "Synced"}
             </span>}
           </div>
 
@@ -411,7 +411,7 @@ export default function BudgetTracker() {
                     background: "#052e16", border: "1.5px solid #4ade80",
                     color: "#4ade80", padding: "8px 14px", borderRadius: 8,
                     fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-                  }}>↓ Pull</button>
+                  }}>v Pull</button>
                 )}
                 {syncCode && (
                   <button onClick={clearSyncCode} style={{
@@ -509,7 +509,7 @@ export default function BudgetTracker() {
                               {p.paid && <span style={{ fontSize: 10, fontWeight: 700, color: "#4ade80", background: "#052e16", padding: "1px 5px", borderRadius: 4 }}>{doneLabel}</span>}
                             </div>
                             {item.payments.length > 1 && (
-                              <button onClick={() => removePayment(item.id, p.id)} style={{ background: "none", border: "none", color: "#6b7280", fontSize: 18, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>×</button>
+                              <button onClick={() => removePayment(item.id, p.id)} style={{ background: "none", border: "none", color: "#6b7280", fontSize: 18, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>x</button>
                             )}
                           </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -589,7 +589,7 @@ export default function BudgetTracker() {
         {/* Actions */}
         <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 8 }}>
           <button onClick={exportCSV} style={{ background: "#166534", border: "1.5px solid #4ade80", color: "#4ade80", padding: "9px 22px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            {copied ? "✓ Copied!" : "↓ Copy CSV"}
+            {copied ? "ok Copied!" : "v Copy CSV"}
           </button>
           <button onClick={() => setItems(prev => prev.map(i => ({ ...i, paid: false, dueDate: "", payments: i.multiDate ? [newPayment()] : undefined })))} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "9px 20px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
             Reset Month
