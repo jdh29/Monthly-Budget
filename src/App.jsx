@@ -176,7 +176,34 @@ export default function BudgetTracker() {
     setTimeout(() => setSyncStatus(""), 2000);
   };
 
-  useEffect(() => { if (syncCode) loadFromCloud(syncCode); }, [syncCode]);
+  useEffect(() => {
+    if (!syncCode) return;
+    // On startup, fetch cloud data and merge - cloud wins only if it has more data
+    fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
+      .then(r => r.json())
+      .then(cloudData => {
+        if (!cloudData || typeof cloudData !== "object" || Object.keys(cloudData).length === 0) return;
+        const local = loadStorage();
+        // Count filled entries in local vs cloud to determine which is more complete
+        const countFilled = (months) => Object.values(months).reduce((total, month) => {
+          if (!Array.isArray(month)) return total;
+          return total + month.reduce((s, item) => {
+            if (item.multiDate && item.payments) return s + item.payments.filter(p => p.amount && p.amount !== "").length;
+            return s + (item.amount && item.amount !== "" ? 1 : 0);
+          }, 0);
+        }, 0);
+        const localCount = countFilled(local);
+        const cloudCount = countFilled(cloudData);
+        // Use cloud data if it has more filled entries than local
+        if (cloudCount > localCount) {
+          isSavingFromCloud.current = true;
+          setAllMonths(cloudData);
+          saveStorage(cloudData);
+          setTimeout(() => { isSavingFromCloud.current = false; }, 3000);
+        }
+      })
+      .catch(() => {});
+  }, [syncCode]);
 
   const applySyncCode = () => {
     const code = syncInput.trim();
