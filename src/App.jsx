@@ -88,3 +88,166 @@ export default function BudgetTracker() {
   const visibleCategories = view === "all" ? Object.keys(categories) : [view];
   const isCurrentMonth = currentKey === todayKey;
   const dotColor = syncStatus === "error" ? "#ef4444" : (syncStatus === "saving" || syncStatus === "loading") ? "#fbbf24" : syncCode ? "#4ade80" : "#374151";
+  return (
+    <div style={{ minHeight: "100vh", background: "#030712", color: "#f9fafb", fontFamily: "'Inter', system-ui, sans-serif", padding: "20px 14px 40px" }}>
+      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontSize: 10, letterSpacing: "0.14em", color: "#6b7280", textTransform: "uppercase", marginBottom: 6 }}>Monthly Budget Tracker</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <button onClick={() => setShowMonthPicker(!showMonthPicker)} style={{ background: "none", border: "1.5px solid #374151", borderRadius: 10, color: "#f9fafb", padding: "6px 14px", fontSize: 24, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 8 }}>
+                  {getMonthLabel(currentKey)}<span style={{ fontSize: 14, color: "#6b7280" }}>v</span>
+                </button>
+                {!isCurrentMonth && <button onClick={() => switchMonth(todayKey)} style={{ background: "#1f2937", border: "1px solid #374151", borderRadius: 8, color: "#9ca3af", padding: "5px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Today</button>}
+              </div>
+            </div>
+            <button onClick={() => { setSyncInput(syncCode); setShowSync(!showSync); }} style={{ display: "flex", alignItems: "center", gap: 7, background: "#1a1f2e", border: "1.5px solid #2d3748", borderRadius: 20, padding: "8px 14px", cursor: "pointer", marginTop: 2, flexShrink: 0 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: dotColor }} />
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={syncCode ? "#a78bfa" : "#6b7280"} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 2v6h-6" /><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M3 22v-6h6" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+              </svg>
+            </button>
+          </div>
+          {showMonthPicker && (
+            <div style={{ background: "#111827", border: "1px solid #374151", borderRadius: 12, padding: 8, marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {monthOptions.map(key => <button key={key} onClick={() => switchMonth(key)} style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: key === currentKey ? "1.5px solid #4ade80" : "1.5px solid #374151", background: key === currentKey ? "#052e16" : "#1f2937", color: key === currentKey ? "#4ade80" : key === todayKey ? "#f9fafb" : "#9ca3af" }}>{getMonthLabel(key)}</button>)}
+            </div>
+          )}
+          <div style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>
+            {paidCount} of {items.length} payments marked as paid
+            {!syncCode && <span style={{ marginLeft: 10, fontSize: 11, color: "#4ade80" }}>* Auto-saving</span>}
+            {syncCode && syncStatus && <span style={{ marginLeft: 10, fontSize: 11, color: dotColor }}>* {syncStatus === "saving" ? "Syncing..." : syncStatus === "loading" ? "Loading..." : syncStatus === "error" ? "Sync error" : "Synced"}</span>}
+          </div>
+          {showSync && (
+            <div style={{ background: "#111827", border: "1px solid #2d3748", borderRadius: 14, padding: 16, marginTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#f9fafb", marginBottom: 4 }}>Cross-device Sync</div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>Enter the same sync code on all your devices to keep data in sync.</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <input value={syncInput} onChange={e => setSyncInput(e.target.value)} placeholder="e.g. james-budget-2026" style={{ flex: 1, minWidth: 160, padding: "8px 12px", background: "#0f172a", border: "1px solid #374151", borderRadius: 8, color: "#f9fafb", fontSize: 13, fontFamily: "inherit", outline: "none" }} />
+                <button onClick={applySyncCode} style={{ background: "#3b0764", border: "1.5px solid #a78bfa", color: "#a78bfa", padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Save</button>
+                {syncCode && <button onClick={() => loadFromCloud(syncCode)} style={{ background: "#052e16", border: "1.5px solid #4ade80", color: "#4ade80", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Pull</button>}
+                {syncCode && <button onClick={clearSyncCode} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "8px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Disable</button>}
+              </div>
+              {syncCode && <div style={{ fontSize: 11, color: "#4b5563", marginTop: 10 }}>Active code: <span style={{ color: "#a78bfa" }}>{syncCode}</span></div>}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 24 }}>
+          {[{ label: "Monthly Income", value: totalIncome, color: "#4ade80" }, { label: "Monthly Expenses", value: totalExpenses, color: "#f97316" }, { label: balance >= 0 ? "Surplus" : "Deficit", value: Math.abs(balance), color: balance >= 0 ? "#34d399" : "#ef4444" }].map(({ label, value, color }) => (
+            <div key={label} style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 12, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color }}>{fmt(value)}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20 }}>
+          <button onClick={() => setView("all")} style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: view === "all" ? "1.5px solid #f9fafb" : "1.5px solid #374151", background: view === "all" ? "#1f2937" : "#111827", color: view === "all" ? "#f9fafb" : "#6b7280" }}>All</button>
+          {Object.keys(categories).map(cat => { const meta = CATEGORY_COLORS[cat] || { color: "#9ca3af", bg: "#111827", border: "#374151" }; return <button key={cat} onClick={() => setView(cat)} style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: view === cat ? "1.5px solid " + meta.color : "1.5px solid #374151", background: view === cat ? meta.bg : "#111827", color: view === cat ? meta.color : "#6b7280" }}>{cat}</button>; })}
+        </div>
+        {visibleCategories.map(cat => {
+          const meta = CATEGORY_COLORS[cat] || { color: "#9ca3af", bg: "#111827", border: "#374151" };
+          const catItems = categories[cat] || [];
+          const catTotal = monthlyByCategory[cat] || 0;
+          return (
+            <div key={cat} style={{ background: "#0d1117", border: "1px solid " + meta.border, borderRadius: 14, marginBottom: 16, overflow: "hidden" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", background: meta.bg, borderBottom: "1px solid " + meta.border }}>
+                <span style={{ fontWeight: 700, fontSize: 13, color: meta.color, textTransform: "uppercase", letterSpacing: "0.06em" }}>{cat}</span>
+                <span style={{ fontWeight: 700, fontSize: 14, color: meta.color }}>{fmt(catTotal)}<span style={{ fontWeight: 400, fontSize: 11, color: "#6b7280", marginLeft: 4 }}>/mo</span></span>
+              </div>
+              {catItems.map((item, idx) => {
+                const isIncome = item.isIncome;
+                if (item.multiDate) {
+                  const apTotal = item.payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+                  const allDone = item.payments.length > 0 && item.payments.every(p => p.paid);
+                  const entryLabel = isIncome ? "Pay" : "Payment";
+                  const dateLabel = isIncome ? "Pay Date" : "Due Date";
+                  const doneLabel = isIncome ? "RECVD" : "PAID";
+                  return (
+                    <div key={item.id} style={{ borderTop: idx > 0 ? "1px solid #1a1f2e" : "none" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px 6px", background: allDone ? "rgba(74,222,128,0.04)" : "transparent" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>{item.label}</span>
+                          {isIncome && <span style={{ fontSize: 9, fontWeight: 700, color: "#4ade80", background: "#052e16", border: "1px solid #166534", padding: "1px 5px", borderRadius: 4 }}>INCOMING</span>}
+                          <span style={{ fontSize: 10, color: "#6b7280" }}>{item.payments.length} {entryLabel.toLowerCase()}{item.payments.length !== 1 ? "s" : ""} this month</span>
+                          {apTotal > 0 && <span style={{ fontSize: 11, color: "#f9fafb" }}>= {fmt(apTotal)}</span>}
+                        </div>
+                        <button onClick={() => addPayment(item.id)} style={{ background: meta.bg, border: "1px solid " + meta.border, color: meta.color, padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add</button>
+                      </div>
+                      {item.payments.map((p, pi) => (
+                        <div key={p.id} style={{ padding: "8px 12px 8px 24px", background: p.paid ? "rgba(74,222,128,0.04)" : "#0a0e17", borderTop: "1px solid #1a1f2e", opacity: p.paid ? 0.6 : 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <input type="checkbox" checked={p.paid} onChange={e => updatePayment(item.id, p.id, "paid", e.target.checked)} style={{ width: 16, height: 16, accentColor: meta.color, cursor: "pointer" }} />
+                              <span style={{ fontSize: 12, color: p.paid ? "#6b7280" : "#9ca3af", textDecoration: p.paid ? "line-through" : "none" }}>{entryLabel} {pi + 1}</span>
+                              {p.paid && <span style={{ fontSize: 10, fontWeight: 700, color: "#4ade80", background: "#052e16", padding: "1px 5px", borderRadius: 4 }}>{doneLabel}</span>}
+                            </div>
+                            {item.payments.length > 1 && <button onClick={() => removePayment(item.id, p.id)} style={{ background: "none", border: "none", color: "#6b7280", fontSize: 18, cursor: "pointer", padding: "0 4px" }}>x</button>}
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            <div>
+                              <div style={{ fontSize: 9, color: "#4b5563", marginBottom: 3, textTransform: "uppercase" }}>Amount</div>
+                              <div style={{ position: "relative" }}>
+                                <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "#6b7280", fontSize: 13, pointerEvents: "none" }}>$</span>
+                                <input type="number" min="0" placeholder="0" value={p.amount} onChange={e => updatePayment(item.id, p.id, "amount", e.target.value)} style={{ width: "100%", padding: "8px 8px 8px 22px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: "#f9fafb", fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = meta.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 9, color: "#4b5563", marginBottom: 3, textTransform: "uppercase" }}>{dateLabel}</div>
+                              <input type="date" value={p.dueDate} onChange={e => updatePayment(item.id, p.id, "dueDate", e.target.value)} style={{ width: "100%", padding: "8px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: p.dueDate ? "#f9fafb" : "#4b5563", fontSize: 13, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = meta.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }
+                const monthly = toMonthly(item.amount, item.frequency);
+                return (
+                  <div key={item.id} style={{ padding: "10px 14px", background: item.paid ? "rgba(74,222,128,0.04)" : "transparent", borderTop: idx > 0 ? "1px solid #1a1f2e" : "none", opacity: item.paid ? 0.7 : 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <input type="checkbox" checked={item.paid} onChange={e => update(item.id, "paid", e.target.checked)} style={{ width: 18, height: 18, accentColor: meta.color, cursor: "pointer", flexShrink: 0 }} />
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: item.paid ? "#6b7280" : "#f9fafb", textDecoration: item.paid ? "line-through" : "none" }}>{item.label}</span>
+                            {isIncome && <span style={{ fontSize: 9, fontWeight: 700, color: "#4ade80", background: "#052e16", border: "1px solid #166534", padding: "1px 5px", borderRadius: 4 }}>INCOMING</span>}
+                          </div>
+                          {monthly > 0 && item.frequency !== "Monthly" && <div style={{ fontSize: 11, color: "#4b5563", marginTop: 1 }}>{fmt(monthly)}/mo</div>}
+                        </div>
+                      </div>
+                      {item.paid && <span style={{ fontSize: 10, fontWeight: 700, color: "#4ade80", background: "#052e16", padding: "2px 8px", borderRadius: 5 }}>{isIncome ? "RECVD" : "PAID"}</span>}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, paddingLeft: 28 }}>
+                      <div>
+                        <div style={{ fontSize: 9, color: "#4b5563", marginBottom: 3, textTransform: "uppercase" }}>Amount</div>
+                        <div style={{ position: "relative" }}>
+                          <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "#6b7280", fontSize: 13, pointerEvents: "none" }}>$</span>
+                          <input type="number" min="0" placeholder="0" value={item.amount} onChange={e => update(item.id, "amount", e.target.value)} style={{ width: "100%", padding: "8px 6px 8px 22px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: "#f9fafb", fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = meta.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 9, color: "#4b5563", marginBottom: 3, textTransform: "uppercase" }}>Frequency</div>
+                        <select value={item.frequency} onChange={e => update(item.id, "frequency", e.target.value)} style={{ width: "100%", padding: "8px 4px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: "#f9fafb", fontSize: 12, fontFamily: "inherit", outline: "none", cursor: "pointer", boxSizing: "border-box" }}>
+                          {FREQUENCY_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 9, color: "#4b5563", marginBottom: 3, textTransform: "uppercase" }}>{isIncome ? "Pay Day" : "Due Date"}</div>
+                        <input type="date" value={item.dueDate} onChange={e => update(item.id, "dueDate", e.target.value)} style={{ width: "100%", padding: "8px 4px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: item.dueDate ? "#f9fafb" : "#4b5563", fontSize: 11, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = meta.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+        <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 8 }}>
+          <button onClick={exportCSV} style={{ background: "#166534", border: "1.5px solid #4ade80", color: "#4ade80", padding: "9px 22px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{copied ? "Copied!" : "Copy CSV"}</button>
+          <button onClick={() => setItems(prev => prev.map(i => ({ ...i, paid: false, dueDate: "", payments: i.multiDate ? [newPayment()] : undefined })))} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "9px 20px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Reset Month</button>
+        </div>
+      </div>
+    </div>
+  );
+}
