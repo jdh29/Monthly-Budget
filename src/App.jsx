@@ -94,13 +94,22 @@ const saveStorage = (data) => {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
 };
 
+const SYNC_CODE_KEY = "budget_sync_code";
+
+const loadSyncCode = () => {
+  try { return localStorage.getItem(SYNC_CODE_KEY) || ""; } catch { return ""; }
+};
+
+const saveSyncCode = (code) => {
+  try { localStorage.setItem(SYNC_CODE_KEY, code); } catch {}
+};
+
 export default function BudgetTracker() {
   const todayKey = getMonthKey(new Date());
 
   const [allMonths, setAllMonths] = useState(() => {
     const stored = loadStorage();
     if (!stored[todayKey]) {
-      // Check if there's a previous month to roll over from
       const keys = Object.keys(stored).sort();
       const lastKey = keys[keys.length - 1];
       const fresh = lastKey && stored[lastKey]
@@ -115,13 +124,68 @@ export default function BudgetTracker() {
   const [copied, setCopied] = useState(false);
   const [view, setView] = useState("all");
   const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [syncCode, setSyncCode] = useState(loadSyncCode);
+  const [syncInput, setSyncInput] = useState(loadSyncCode);
+  const [showSync, setShowSync] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(""); // "", "saving", "saved", "loading", "error"
 
   const items = allMonths[currentKey] || buildFreshItems(DEFAULT_ITEMS);
 
-  // Auto-save whenever allMonths changes
+  // Auto-save to localStorage whenever allMonths changes
   useEffect(() => {
     saveStorage(allMonths);
   }, [allMonths]);
+
+  // Auto-save to cloud whenever allMonths changes (debounced)
+  useEffect(() => {
+    if (!syncCode) return;
+    setSyncStatus("saving");
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ syncCode, data: allMonths }),
+        });
+        if (res.ok) setSyncStatus("saved");
+        else setSyncStatus("error");
+      } catch { setSyncStatus("error"); }
+      setTimeout(() => setSyncStatus(""), 2000);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [allMonths, syncCode]);
+
+  // Load from cloud on startup if sync code exists
+  useEffect(() => {
+    if (!syncCode) return;
+    setSyncStatus("loading");
+    fetch(`/api/load?syncCode=${encodeURIComponent(syncCode)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data) {
+          setAllMonths(data);
+          saveStorage(data);
+        }
+        setSyncStatus("saved");
+        setTimeout(() => setSyncStatus(""), 2000);
+      })
+      .catch(() => setSyncStatus("error"));
+  }, [syncCode]);
+
+  const applySyncCode = () => {
+    const code = syncInput.trim();
+    if (!code) return;
+    saveSyncCode(code);
+    setSyncCode(code);
+    setShowSync(false);
+  };
+
+  const clearSyncCode = () => {
+    saveSyncCode("");
+    setSyncCode("");
+    setSyncInput("");
+    setShowSync(false);
+  };
 
   const setItems = (updater) => {
     setAllMonths(prev => {
@@ -278,10 +342,60 @@ export default function BudgetTracker() {
             </div>
           )}
 
-          <div style={{ fontSize: 13, color: "#6b7280", marginTop: 6 }}>
-            {paidCount} of {items.length} payments marked as paid
-            <span style={{ marginLeft: 10, fontSize: 11, color: "#4ade80" }}>● Auto-saving</span>
+          <div style={{ fontSize: 13, color: "#6b7280", marginTop: 6, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span>{paidCount} of {items.length} payments marked as paid</span>
+            {syncCode ? (
+              <span style={{ fontSize: 11, color: syncStatus === "error" ? "#ef4444" : syncStatus === "saving" ? "#fbbf24" : "#4ade80" }}>
+                ● {syncStatus === "saving" ? "Syncing..." : syncStatus === "error" ? "Sync error" : syncStatus === "loading" ? "Loading..." : "Synced"}
+              </span>
+            ) : (
+              <span style={{ fontSize: 11, color: "#4ade80" }}>● Auto-saving</span>
+            )}
+            <button onClick={() => { setSyncInput(syncCode); setShowSync(!showSync); }} style={{
+              background: syncCode ? "#082f49" : "#1f2937",
+              border: `1px solid ${syncCode ? "#075985" : "#374151"}`,
+              color: syncCode ? "#38bdf8" : "#9ca3af",
+              padding: "3px 10px", borderRadius: 6, fontSize: 11,
+              fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+            }}>
+              {syncCode ? "⚙ Sync On" : "⚙ Set Sync"}
+            </button>
           </div>
+
+          {/* Sync Panel */}
+          {showSync && (
+            <div style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 12, padding: 14, marginTop: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#f9fafb", marginBottom: 6 }}>Cross-device Sync</div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+                Enter the same sync code on all your devices to keep data in sync.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <input
+                  value={syncInput}
+                  onChange={e => setSyncInput(e.target.value)}
+                  placeholder="Enter a sync code e.g. james-budget-2026"
+                  style={{
+                    flex: 1, minWidth: 180, padding: "8px 12px",
+                    background: "#0f172a", border: "1px solid #374151",
+                    borderRadius: 8, color: "#f9fafb", fontSize: 13,
+                    fontFamily: "inherit", outline: "none",
+                  }}
+                />
+                <button onClick={applySyncCode} style={{
+                  background: "#075985", border: "1px solid #38bdf8",
+                  color: "#38bdf8", padding: "8px 16px", borderRadius: 8,
+                  fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                }}>Save</button>
+                {syncCode && (
+                  <button onClick={clearSyncCode} style={{
+                    background: "none", border: "1px solid #374151",
+                    color: "#6b7280", padding: "8px 16px", borderRadius: 8,
+                    fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                  }}>Disable</button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Summary Cards */}
