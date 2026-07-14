@@ -334,7 +334,7 @@ export default function BudgetTracker() {
                   <button onClick={() => switchMonth(todayKey)} style={{
                     background: "#1f2937", border: "1px solid #374151", borderRadius: 8,
                     color: "#9ca3af", padding: "5px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
-                  }}><- Today</button>
+                  }}>Today</button>
                 )}
               </div>
             </div>
@@ -411,7 +411,7 @@ export default function BudgetTracker() {
                     background: "#052e16", border: "1.5px solid #4ade80",
                     color: "#4ade80", padding: "8px 14px", borderRadius: 8,
                     fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-                  }}>v Pull</button>
+                  }}>Pull Latest</button>
                 )}
                 {syncCode && (
                   <button onClick={clearSyncCode} style={{
@@ -589,7 +589,7 @@ export default function BudgetTracker() {
         {/* Actions */}
         <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 8 }}>
           <button onClick={exportCSV} style={{ background: "#166534", border: "1.5px solid #4ade80", color: "#4ade80", padding: "9px 22px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            {copied ? "ok Copied!" : "v Copy CSV"}
+            {copied ? "Copied!" : "Copy CSV"}
           </button>
           <button onClick={() => setItems(prev => prev.map(i => ({ ...i, paid: false, dueDate: "", payments: i.multiDate ? [newPayment()] : undefined })))} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "9px 20px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
             Reset Month
