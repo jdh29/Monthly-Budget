@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 
 const FREQUENCY_OPTIONS = ["Weekly", "Fortnightly", "Monthly"];
 const toMonthly = (amount, frequency) => {
@@ -54,17 +54,9 @@ const rolloverItems = (prev, template) => template.map(item => {
   return { ...item, amount: p.amount, frequency: p.frequency, dueDate: "", paid: false, payments: item.multiDate ? (p.payments || [newPayment()]).map(x => ({ ...x, dueDate: "", paid: false })) : undefined };
 });
 
-const SYNC_KEY = "budget_sync_code";
+const SYNC_KEY = "bgt_sync";
 const getSyncCode = () => { try { return localStorage.getItem(SYNC_KEY) || ""; } catch { return ""; } };
-const setSyncCode = (c) => { try { localStorage.setItem(SYNC_KEY, c); } catch {} };
-
-const cloudSave = (syncCode, data) => fetch("/api/save", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ syncCode, data }),
-});
-
-const cloudLoad = (syncCode) => fetch("/api/load?syncCode=" + encodeURIComponent(syncCode)).then(r => r.json());
+const storeSyncCode = (c) => { try { localStorage.setItem(SYNC_KEY, c); } catch {} };
 
 export default function App() {
   const today = getMonthKey(new Date());
@@ -72,115 +64,95 @@ export default function App() {
   const [monthKey, setMonthKey] = useState(today);
   const [view, setView] = useState("all");
   const [showPicker, setShowPicker] = useState(false);
-  const [syncCode, setSyncCodeState] = useState(getSyncCode);
+  const [syncCode, setSyncCode] = useState(getSyncCode);
   const [syncInput, setSyncInput] = useState(getSyncCode);
   const [showSync, setShowSync] = useState(false);
-  const [status, setStatus] = useState("idle"); // idle, loading, saving, saved, error
+  const [status, setStatus] = useState("idle");
   const [copied, setCopied] = useState(false);
   const [ready, setReady] = useState(false);
-  const saveTimer = React.useRef(null);
-  const isFirstLoad = React.useRef(true);
+
+  // These refs track cloud operations to prevent conflicts
+  const cloudLoading = useRef(false);
+  const saveTimer = useRef(null);
 
   const items = months[monthKey] || buildFreshItems(DEFAULT_ITEMS);
 
-  // On startup: load from cloud once
+  // Load from cloud ONCE on startup
   useEffect(() => {
     const code = getSyncCode();
     if (!code) { setReady(true); return; }
+    cloudLoading.current = true;
     setStatus("loading");
-    cloudLoad(code)
+    fetch("/api/load?syncCode=" + encodeURIComponent(code))
+      .then(r => r.json())
       .then(d => {
         if (d && typeof d === "object" && Object.keys(d).length > 0) {
           setMonths(d);
         }
-        setStatus("saved");
-        setTimeout(() => setStatus("idle"), 2000);
+        setStatus("idle");
       })
       .catch(() => setStatus("idle"))
-      .finally(() => { setReady(true); isFirstLoad.current = false; });
-  }, []);
+      .finally(() => {
+        // Wait 2 seconds before allowing auto-save to fire
+        setTimeout(() => {
+          cloudLoading.current = false;
+          setReady(true);
+        }, 2000);
+      });
+  }, []); // Empty array = runs ONCE only
 
-  // After startup load, auto-save on every change
+  // Auto-save: only fires when ready AND not loading from cloud
   useEffect(() => {
-    if (!ready || !syncCode || isFirstLoad.current) return;
+    if (!ready || !syncCode || cloudLoading.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    setStatus("saving");
     saveTimer.current = setTimeout(() => {
-      cloudSave(syncCode, months)
+      if (cloudLoading.current) return;
+      setStatus("saving");
+      fetch("/api/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ syncCode, data: months }),
+      })
         .then(r => setStatus(r.ok ? "saved" : "error"))
         .catch(() => setStatus("error"))
         .finally(() => setTimeout(() => setStatus("idle"), 2000));
-    }, 1500);
-    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [months]);
+    }, 2000);
+    return () => clearTimeout(saveTimer.current);
+  }, [months, ready, syncCode]);
 
   const connect = () => {
     const code = syncInput.trim();
     if (!code) return;
+    storeSyncCode(code);
     setSyncCode(code);
-    setSyncCodeState(code);
+    cloudLoading.current = true;
     setStatus("loading");
-    cloudLoad(code)
+    fetch("/api/load?syncCode=" + encodeURIComponent(code))
+      .then(r => r.json())
       .then(d => {
-        if (d && typeof d === "object" && Object.keys(d).length > 0) {
-          setMonths(d);
-        }
-        setStatus("saved");
-        setTimeout(() => setStatus("idle"), 2000);
+        if (d && typeof d === "object" && Object.keys(d).length > 0) setMonths(d);
+        setStatus("idle");
       })
-      .catch(() => setStatus("error"));
+      .catch(() => setStatus("idle"))
+      .finally(() => setTimeout(() => { cloudLoading.current = false; }, 2000));
     setShowSync(false);
-  };
-
-  const pull = () => {
-    if (!syncCode) return;
-    setStatus("loading");
-    cloudLoad(syncCode)
-      .then(d => {
-        if (d && typeof d === "object" && Object.keys(d).length > 0) {
-          isFirstLoad.current = true;
-          setMonths(d);
-          setTimeout(() => { isFirstLoad.current = false; }, 2000);
-        }
-        setStatus("saved");
-        setTimeout(() => setStatus("idle"), 2000);
-      })
-      .catch(() => setStatus("error"));
-  };
-
-  const push = () => {
-    if (!syncCode) return;
-    setStatus("saving");
-    cloudSave(syncCode, months)
-      .then(r => setStatus(r.ok ? "saved" : "error"))
-      .catch(() => setStatus("error"))
-      .finally(() => setTimeout(() => setStatus("idle"), 2000));
   };
 
   const wipeAll = () => {
     const empty = { [today]: buildFreshItems(DEFAULT_ITEMS) };
-    isFirstLoad.current = true;
+    cloudLoading.current = true;
     setMonths(empty);
-    cloudSave(syncCode, empty)
-      .then(() => { setStatus("saved"); setTimeout(() => { setStatus("idle"); isFirstLoad.current = false; }, 2000); })
-      .catch(() => setStatus("error"));
+    fetch("/api/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ syncCode, data: empty }),
+    }).finally(() => setTimeout(() => { cloudLoading.current = false; }, 2000));
   };
 
-  const disconnect = () => {
-    setSyncCode("");
-    setSyncCodeState("");
-    setSyncInput("");
-    setShowSync(false);
-    setStatus("idle");
-  };
-
-  const setItems = (fn) => {
-    isFirstLoad.current = false;
-    setMonths(prev => {
-      const cur = prev[monthKey] || buildFreshItems(DEFAULT_ITEMS);
-      return { ...prev, [monthKey]: typeof fn === "function" ? fn(cur) : fn };
-    });
-  };
+  const setItems = (fn) => setMonths(prev => {
+    const cur = prev[monthKey] || buildFreshItems(DEFAULT_ITEMS);
+    return { ...prev, [monthKey]: typeof fn === "function" ? fn(cur) : fn };
+  });
 
   const update = (id, field, val) => setItems(prev => prev.map(i => i.id === id ? { ...i, [field]: val } : i));
   const addPay = (id) => setItems(prev => prev.map(i => i.id === id ? { ...i, payments: [...(i.payments || []), newPayment()] } : i));
@@ -247,11 +219,10 @@ export default function App() {
 
   const visCats = view === "all" ? Object.keys(cats) : [view];
   const dotColor = status === "error" ? "#ef4444" : (status === "saving" || status === "loading") ? "#fbbf24" : syncCode ? "#4ade80" : "#374151";
-  const statusText = status === "saving" ? "Saving..." : status === "loading" ? "Loading..." : status === "error" ? "Error" : status === "saved" ? "Saved" : "";
 
   if (!ready) return (
-    <div style={{ minHeight: "100vh", background: "#030712", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ color: "#6b7280", fontSize: 14 }}>Loading...</div>
+    <div style={{ minHeight: "100vh", background: "#030712", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12 }}>
+      <div style={{ color: "#6b7280", fontSize: 14 }}>Loading from cloud...</div>
     </div>
   );
 
@@ -286,24 +257,24 @@ export default function App() {
 
           <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
             <span>{paidCount} of {items.length} paid</span>
-            {statusText && <span style={{ fontSize: 10, color: dotColor }}>* {statusText}</span>}
-            {!syncCode && !statusText && <span style={{ fontSize: 10, color: "#6b7280" }}>* No sync</span>}
+            {status === "saving" && <span style={{ fontSize: 10, color: "#fbbf24" }}>* Saving...</span>}
+            {status === "saved" && <span style={{ fontSize: 10, color: "#4ade80" }}>* Saved</span>}
+            {status === "error" && <span style={{ fontSize: 10, color: "#ef4444" }}>* Save failed</span>}
+            {status === "loading" && <span style={{ fontSize: 10, color: "#fbbf24" }}>* Loading...</span>}
           </div>
 
           {showSync && (
             <div style={{ background: "#111827", border: "1px solid #2d3748", borderRadius: 12, padding: 14, marginTop: 10 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#f9fafb", marginBottom: 4 }}>Cloud Sync</div>
-              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 10 }}>Enter your sync code to connect all devices.</div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 10 }}>Enter the same code on all devices. Data saves automatically.</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
                 <input value={syncInput} onChange={e => setSyncInput(e.target.value)} placeholder="e.g. james-budget-2026" style={{ flex: 1, minWidth: 140, padding: "7px 10px", background: "#0f172a", border: "1px solid #374151", borderRadius: 8, color: "#f9fafb", fontSize: 13, fontFamily: "inherit", outline: "none" }} />
                 <button onClick={connect} style={{ background: "#3b0764", border: "1.5px solid #a78bfa", color: "#a78bfa", padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Connect</button>
               </div>
               {syncCode && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button onClick={pull} style={{ background: "#052e16", border: "1.5px solid #4ade80", color: "#4ade80", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Pull</button>
-                  <button onClick={push} style={{ background: "#082f49", border: "1.5px solid #38bdf8", color: "#38bdf8", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Push</button>
                   <button onClick={wipeAll} style={{ background: "#1c0606", border: "1px solid #991b1b", color: "#f87171", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Wipe All</button>
-                  <button onClick={disconnect} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "7px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Disconnect</button>
+                  <button onClick={() => { storeSyncCode(""); setSyncCode(""); setSyncInput(""); setShowSync(false); }} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "7px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Disconnect</button>
                 </div>
               )}
               {syncCode && <div style={{ fontSize: 10, color: "#4b5563", marginTop: 8 }}>Connected: <span style={{ color: "#a78bfa" }}>{syncCode}</span></div>}
@@ -423,7 +394,7 @@ export default function App() {
 
         <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
           <button onClick={exportCSV} style={{ background: "#166534", border: "1.5px solid #4ade80", color: "#4ade80", padding: "9px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{copied ? "Copied!" : "Copy CSV"}</button>
-          <button onClick={() => { isFirstLoad.current = false; setItems(prev => prev.map(i => ({ ...i, paid: false, dueDate: "", payments: i.multiDate ? [newPayment()] : undefined }))); }} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "9px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Reset Month</button>
+          <button onClick={() => setItems(prev => prev.map(i => ({ ...i, paid: false, dueDate: "", payments: i.multiDate ? [newPayment()] : undefined })))} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "9px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Reset Month</button>
         </div>
       </div>
     </div>
