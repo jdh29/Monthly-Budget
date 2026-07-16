@@ -55,17 +55,25 @@ const SYNC_CODE_KEY = "budget_sync_code";
 const LAST_SAVED_KEY = "budget_last_saved";
 const loadStorage = () => {
   try {
-    // Try v2 first
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-    // Fall back to v1 and migrate
-    const oldRaw = localStorage.getItem("budget_tracker_v1");
-    if (oldRaw) {
-      const data = JSON.parse(oldRaw);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-      return data;
+    const v2 = raw ? JSON.parse(raw) : {};
+    // Check if v2 has any actual data
+    const hasData = Object.values(v2).some(month =>
+      Array.isArray(month) && month.some(item =>
+        (item.amount && item.amount !== "") ||
+        (item.payments && item.payments.some(p => p.amount && p.amount !== ""))
+      )
+    );
+    if (!hasData) {
+      // Try v1
+      const oldRaw = localStorage.getItem("budget_tracker_v1");
+      if (oldRaw) {
+        const v1 = JSON.parse(oldRaw);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(v1));
+        return v1;
+      }
     }
-    return {};
+    return v2;
   } catch { return {}; }
 };
 const saveStorage = (data) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); localStorage.setItem(LAST_SAVED_KEY, Date.now().toString()); } catch {} };
