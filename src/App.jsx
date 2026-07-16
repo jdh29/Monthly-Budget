@@ -121,26 +121,7 @@ export default function App() {
     return () => clearTimeout(t);
   }, [months, syncCode, loading]);
 
-  // Poll cloud every 30 seconds - only update if we haven't saved recently
-  useEffect(() => {
-    if (!syncCode) return;
-    const interval = setInterval(() => {
-      if (saving.current) return;
-      // Don't overwrite if we saved in the last 10 seconds
-      if (Date.now() - lastSavedAt.current < 10000) return;
-      fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
-        .then(r => r.json())
-        .then(d => {
-          if (d && typeof d === "object" && Object.keys(d).length > 0) {
-            saving.current = true;
-            setMonths(d);
-            setTimeout(() => { saving.current = false; }, 2000);
-          }
-        })
-        .catch(() => {});
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [syncCode]);
+  // No polling - data loads on startup and saves on change
 
   const pushToCloud = () => {
     if (!syncCode) return;
