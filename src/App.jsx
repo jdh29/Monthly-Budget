@@ -9,6 +9,7 @@ const toMonthly = (amount, frequency) => {
   return n;
 };
 const fmt = (n) => new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
+
 const DEFAULT_ITEMS = [
   { id: "wage", label: "Wage", category: "Income", defaultFreq: "Weekly", isIncome: true, multiDate: true },
   { id: "rent", label: "Rent", category: "Housing", defaultFreq: "Weekly", multiDate: true },
@@ -30,6 +31,7 @@ const DEFAULT_ITEMS = [
   { id: "claude", label: "Claude", category: "Subscriptions", defaultFreq: "Monthly" },
   { id: "haircut", label: "Haircut", category: "Personal", defaultFreq: "Monthly" },
 ];
+
 const CATEGORY_COLORS = {
   "Income": { color: "#4ade80", bg: "#052e16", border: "#166534" },
   "Housing": { color: "#60a5fa", bg: "#0c1f3e", border: "#1e40af" },
@@ -41,287 +43,359 @@ const CATEGORY_COLORS = {
   "Subscriptions": { color: "#38bdf8", bg: "#082f49", border: "#075985" },
   "Personal": { color: "#fb923c", bg: "#1c0f00", border: "#9a3412" },
 };
+
 const newPayment = () => ({ id: Date.now().toString() + Math.floor(Math.random() * 10000).toString(), amount: "", dueDate: "", paid: false });
 const getMonthKey = (date) => date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0");
 const getMonthLabel = (key) => { const p = key.split("-"); return new Date(parseInt(p[0]), parseInt(p[1]) - 1, 1).toLocaleString("en-AU", { month: "long", year: "numeric" }); };
 const buildFreshItems = (t) => t.map(item => ({ ...item, amount: "", frequency: item.defaultFreq, dueDate: "", paid: false, payments: item.multiDate ? [newPayment()] : undefined }));
-const rolloverItems = (prevItems, template) => template.map(item => {
-  const prev = prevItems.find(p => p.id === item.id);
-  if (!prev) return { ...item, amount: "", frequency: item.defaultFreq, dueDate: "", paid: false, payments: item.multiDate ? [newPayment()] : undefined };
-  return { ...item, amount: prev.amount, frequency: prev.frequency, dueDate: "", paid: false, payments: item.multiDate ? (prev.payments || [newPayment()]).map(p => ({ ...p, dueDate: "", paid: false })) : undefined };
+const rolloverItems = (prev, template) => template.map(item => {
+  const p = prev.find(x => x.id === item.id);
+  if (!p) return { ...item, amount: "", frequency: item.defaultFreq, dueDate: "", paid: false, payments: item.multiDate ? [newPayment()] : undefined };
+  return { ...item, amount: p.amount, frequency: p.frequency, dueDate: "", paid: false, payments: item.multiDate ? (p.payments || [newPayment()]).map(x => ({ ...x, dueDate: "", paid: false })) : undefined };
 });
-const STORAGE_KEY = "budget_tracker_v2";
-const SYNC_CODE_KEY = "budget_sync_code";
-const loadStorage = () => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const v2 = raw ? JSON.parse(raw) : {};
-    // Check if v2 has any actual data
-    const hasData = Object.values(v2).some(month =>
-      Array.isArray(month) && month.some(item =>
-        (item.amount && item.amount !== "") ||
-        (item.payments && item.payments.some(p => p.amount && p.amount !== ""))
-      )
-    );
-    if (!hasData) {
-      // Try v1
-      const oldRaw = localStorage.getItem("budget_tracker_v1");
-      if (oldRaw) {
-        const v1 = JSON.parse(oldRaw);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(v1));
-        return v1;
-      }
-    }
-    return v2;
-  } catch { return {}; }
-};
-const saveStorage = (data) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {} };
-const loadSyncCode = () => { try { return localStorage.getItem(SYNC_CODE_KEY) || ""; } catch { return ""; } };
-const saveSyncCode = (code) => { try { localStorage.setItem(SYNC_CODE_KEY, code); } catch {} };
 
-export default function BudgetTracker() {
-  const todayKey = getMonthKey(new Date());
-  const [allMonths, setAllMonths] = useState(() => {
-    const stored = loadStorage();
-    if (!stored[todayKey]) {
-      const keys = Object.keys(stored).filter(k => k !== "__ts").sort();
-      const lastKey = keys[keys.length - 1];
-      stored[todayKey] = lastKey && stored[lastKey] ? rolloverItems(stored[lastKey], DEFAULT_ITEMS) : buildFreshItems(DEFAULT_ITEMS);
-    }
-    return stored;
-  });
-  const [currentKey, setCurrentKey] = useState(todayKey);
-  const [copied, setCopied] = useState(false);
+const SYNC_KEY = "budget_sync_code";
+const loadSyncCode = () => { try { return localStorage.getItem(SYNC_KEY) || ""; } catch { return ""; } };
+const saveSyncCode = (c) => { try { localStorage.setItem(SYNC_KEY, c); } catch {} };
+
+export default function App() {
+  const today = getMonthKey(new Date());
+  const [months, setMonths] = useState({ [today]: buildFreshItems(DEFAULT_ITEMS) });
+  const [key, setKey] = useState(today);
   const [view, setView] = useState("all");
-  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
   const [syncCode, setSyncCode] = useState(loadSyncCode);
   const [syncInput, setSyncInput] = useState(loadSyncCode);
   const [showSync, setShowSync] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
-  const isSavingFromCloud = useRef(false);
+  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const saving = useRef(false);
 
-  const items = allMonths[currentKey] || buildFreshItems(DEFAULT_ITEMS);
+  const items = months[key] || buildFreshItems(DEFAULT_ITEMS);
 
-  // Save to localStorage on every change
+  // Load from cloud on startup
   useEffect(() => {
-    saveStorage(allMonths);
-  }, [allMonths]);
-
-  // Auto-sync to cloud on every change (debounced, skip during cloud load)
-  useEffect(() => {
-    if (!syncCode) return;
-    if (isSavingFromCloud.current) return;
-    setSyncStatus("saving");
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch("/api/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ syncCode, data: allMonths }),
-        });
-        setSyncStatus(res.ok ? "saved" : "error");
-      } catch { setSyncStatus("error"); }
-      setTimeout(() => setSyncStatus(""), 2000);
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, [allMonths, syncCode]);
-
-  // On startup - always load from cloud if sync code set
-  useEffect(() => {
-    if (!syncCode) return;
-    loadFromCloud(syncCode);
-  }, [syncCode]);
-
-  const loadFromCloud = (code) => {
+    if (!syncCode) { setLoading(false); return; }
     setSyncStatus("loading");
-    fetch("/api/load?syncCode=" + encodeURIComponent(code))
+    fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
       .then(r => r.json())
-      .then(data => {
-        if (data && typeof data === "object" && Object.keys(data).length > 0) {
-          isSavingFromCloud.current = true;
-          setAllMonths(data);
-          saveStorage(data);
-          setTimeout(() => { isSavingFromCloud.current = false; }, 3000);
+      .then(d => {
+        if (d && typeof d === "object" && Object.keys(d).length > 0) {
+          setMonths(d);
         }
-        setSyncStatus("saved");
+        setSyncStatus("synced");
         setTimeout(() => setSyncStatus(""), 2000);
       })
-      .catch(() => setSyncStatus("error"));
-  };
+      .catch(() => setSyncStatus(""))
+      .finally(() => setLoading(false));
+  }, []);
 
-  const applySyncCode = () => { const code = syncInput.trim(); if (!code) return; saveSyncCode(code); setSyncCode(code); setShowSync(false); };
-  const clearSyncCode = () => { saveSyncCode(""); setSyncCode(""); setSyncInput(""); setShowSync(false); };
-
-  const pushToCloud = async () => {
-    if (!syncCode) return;
+  // Auto save to cloud on every change (debounced)
+  useEffect(() => {
+    if (!syncCode || loading || saving.current) return;
     setSyncStatus("saving");
-    try {
-      const res = await fetch("/api/save", {
+    const t = setTimeout(() => {
+      saving.current = true;
+      fetch("/api/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syncCode, data: allMonths }),
-      });
-      setSyncStatus(res.ok ? "saved" : "error");
-    } catch { setSyncStatus("error"); }
-    setTimeout(() => setSyncStatus(""), 2000);
-  };
+        body: JSON.stringify({ syncCode, data: months }),
+      })
+        .then(r => { setSyncStatus(r.ok ? "synced" : "error"); })
+        .catch(() => setSyncStatus("error"))
+        .finally(() => {
+          saving.current = false;
+          setTimeout(() => setSyncStatus(""), 2000);
+        });
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [months, syncCode, loading]);
 
-  // Poll cloud every 30 seconds and always update local with cloud data
+  // Poll cloud every 30 seconds
   useEffect(() => {
     if (!syncCode) return;
     const interval = setInterval(() => {
-      if (isSavingFromCloud.current) return;
+      if (saving.current) return;
       fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
         .then(r => r.json())
-        .then(cloudData => {
-          if (!cloudData || typeof cloudData !== "object" || Object.keys(cloudData).length === 0) return;
-          isSavingFromCloud.current = true;
-          setAllMonths(cloudData);
-          saveStorage(cloudData);
-          setTimeout(() => { isSavingFromCloud.current = false; }, 3000);
+        .then(d => {
+          if (d && typeof d === "object" && Object.keys(d).length > 0) {
+            saving.current = true;
+            setMonths(d);
+            setTimeout(() => { saving.current = false; }, 2000);
+          }
         })
         .catch(() => {});
     }, 30000);
     return () => clearInterval(interval);
   }, [syncCode]);
-  const setItems = (updater) => { setAllMonths(prev => { const current = prev[currentKey] || buildFreshItems(DEFAULT_ITEMS); const updated = typeof updater === "function" ? updater(current) : updater; return { ...prev, [currentKey]: updated }; }); };
-  const update = (id, field, value) => { setItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item)); };
-  const addPayment = (itemId) => { setItems(prev => prev.map(item => item.id === itemId ? { ...item, payments: [...(item.payments || []), newPayment()] } : item)); };
-  const updatePayment = (itemId, payId, field, value) => { setItems(prev => prev.map(item => item.id === itemId ? { ...item, payments: item.payments.map(p => p.id === payId ? { ...p, [field]: value } : p) } : item)); };
-  const removePayment = (itemId, payId) => { setItems(prev => prev.map(item => item.id === itemId ? { ...item, payments: item.payments.filter(p => p.id !== payId) } : item)); };
-  const switchMonth = (key) => { setAllMonths(prev => { if (!prev[key]) { const keys = Object.keys(prev).filter(k => k !== "__ts").sort(); const lastKey = keys[keys.length - 1]; return { ...prev, [key]: lastKey && prev[lastKey] ? rolloverItems(prev[lastKey], DEFAULT_ITEMS) : buildFreshItems(DEFAULT_ITEMS) }; } return prev; }); setCurrentKey(key); setShowMonthPicker(false); setView("all"); };
-  const monthOptions = useMemo(() => { const options = []; const now = new Date(); for (let i = -3; i <= 2; i++) { const d = new Date(now.getFullYear(), now.getMonth() + i, 1); options.push(getMonthKey(d)); } Object.keys(allMonths).filter(k => k !== "__ts").forEach(k => { if (!options.includes(k)) options.push(k); }); return options.sort(); }, [allMonths]);
-  const categories = useMemo(() => { const cats = {}; for (const item of items) { if (!cats[item.category]) cats[item.category] = []; cats[item.category].push(item); } return cats; }, [items]);
-  const monthlyByCategory = useMemo(() => { const totals = {}; for (const item of items) { let m; if (item.multiDate && item.payments) { m = item.payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0); } else { m = toMonthly(item.amount, item.frequency); } totals[item.category] = (totals[item.category] || 0) + m; } return totals; }, [items]);
-  const totalIncome = monthlyByCategory["Income"] || 0;
-  const totalExpenses = Object.entries(monthlyByCategory).filter(([cat]) => cat !== "Income").reduce((s, [, v]) => s + v, 0);
+
+  const pushToCloud = () => {
+    if (!syncCode) return;
+    setSyncStatus("saving");
+    saving.current = true;
+    fetch("/api/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ syncCode, data: months }),
+    })
+      .then(r => setSyncStatus(r.ok ? "synced" : "error"))
+      .catch(() => setSyncStatus("error"))
+      .finally(() => { saving.current = false; setTimeout(() => setSyncStatus(""), 2000); });
+  };
+
+  const pullFromCloud = () => {
+    if (!syncCode) return;
+    setSyncStatus("loading");
+    fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
+      .then(r => r.json())
+      .then(d => {
+        if (d && typeof d === "object" && Object.keys(d).length > 0) {
+          saving.current = true;
+          setMonths(d);
+          setTimeout(() => { saving.current = false; }, 2000);
+        }
+        setSyncStatus("synced");
+        setTimeout(() => setSyncStatus(""), 2000);
+      })
+      .catch(() => setSyncStatus("error"));
+  };
+
+  const wipeAll = () => {
+    const empty = { [today]: buildFreshItems(DEFAULT_ITEMS) };
+    saving.current = true;
+    setMonths(empty);
+    setSyncStatus("saving");
+    fetch("/api/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ syncCode, data: empty }),
+    })
+      .then(() => { setSyncStatus("synced"); setTimeout(() => setSyncStatus(""), 2000); })
+      .catch(() => setSyncStatus("error"))
+      .finally(() => { setTimeout(() => { saving.current = false; }, 2000); });
+  };
+
+  const applySyncCode = () => {
+    const c = syncInput.trim();
+    if (!c) return;
+    saveSyncCode(c);
+    setSyncCode(c);
+    setSyncStatus("loading");
+    fetch("/api/load?syncCode=" + encodeURIComponent(c))
+      .then(r => r.json())
+      .then(d => {
+        if (d && typeof d === "object" && Object.keys(d).length > 0) {
+          setMonths(d);
+        }
+        setSyncStatus("synced");
+        setTimeout(() => setSyncStatus(""), 2000);
+      })
+      .catch(() => setSyncStatus("error"));
+    setShowSync(false);
+  };
+
+  const setItems = (fn) => setMonths(prev => {
+    const cur = prev[key] || buildFreshItems(DEFAULT_ITEMS);
+    return { ...prev, [key]: typeof fn === "function" ? fn(cur) : fn };
+  });
+
+  const update = (id, field, val) => setItems(prev => prev.map(i => i.id === id ? { ...i, [field]: val } : i));
+  const addPay = (id) => setItems(prev => prev.map(i => i.id === id ? { ...i, payments: [...(i.payments || []), newPayment()] } : i));
+  const updatePay = (id, pid, field, val) => setItems(prev => prev.map(i => i.id === id ? { ...i, payments: i.payments.map(p => p.id === pid ? { ...p, [field]: val } : p) } : i));
+  const removePay = (id, pid) => setItems(prev => prev.map(i => i.id === id ? { ...i, payments: i.payments.filter(p => p.id !== pid) } : i));
+
+  const switchMonth = (k) => {
+    setMonths(prev => {
+      if (!prev[k]) {
+        const keys = Object.keys(prev).sort();
+        const last = keys[keys.length - 1];
+        return { ...prev, [k]: last && prev[last] ? rolloverItems(prev[last], DEFAULT_ITEMS) : buildFreshItems(DEFAULT_ITEMS) };
+      }
+      return prev;
+    });
+    setKey(k);
+    setShowPicker(false);
+    setView("all");
+  };
+
+  const monthOptions = useMemo(() => {
+    const opts = [];
+    const now = new Date();
+    for (let i = -3; i <= 2; i++) opts.push(getMonthKey(new Date(now.getFullYear(), now.getMonth() + i, 1)));
+    Object.keys(months).forEach(k => { if (!opts.includes(k)) opts.push(k); });
+    return opts.sort();
+  }, [months]);
+
+  const cats = useMemo(() => {
+    const c = {};
+    for (const item of items) { if (!c[item.category]) c[item.category] = []; c[item.category].push(item); }
+    return c;
+  }, [items]);
+
+  const catTotals = useMemo(() => {
+    const t = {};
+    for (const item of items) {
+      const m = item.multiDate && item.payments
+        ? item.payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)
+        : toMonthly(item.amount, item.frequency);
+      t[item.category] = (t[item.category] || 0) + m;
+    }
+    return t;
+  }, [items]);
+
+  const totalIncome = catTotals["Income"] || 0;
+  const totalExpenses = Object.entries(catTotals).filter(([c]) => c !== "Income").reduce((s, [, v]) => s + v, 0);
   const balance = totalIncome - totalExpenses;
   const paidCount = items.filter(i => i.multiDate ? i.payments?.every(p => p.paid) : i.paid).length;
-  const exportCSV = () => { const rows = [["Month", getMonthLabel(currentKey)], [], ["Item", "Category", "Amount", "Frequency", "Monthly Equiv.", "Due Date", "Paid"]]; for (const item of items) { if (item.multiDate && item.payments) { item.payments.forEach((p, i) => { rows.push([item.label + " (payment " + (i + 1) + ")", item.category, p.amount || "0", "One-off", (parseFloat(p.amount) || 0).toFixed(2), p.dueDate || "", p.paid ? "Yes" : "No"]); }); } else { rows.push([item.label, item.category, item.amount || "0", item.frequency, toMonthly(item.amount, item.frequency).toFixed(2), item.dueDate || "", item.paid ? "Yes" : "No"]); } } rows.push([]); rows.push(["TOTAL INCOME", "", "", "", totalIncome.toFixed(2)]); rows.push(["TOTAL EXPENSES", "", "", "", totalExpenses.toFixed(2)]); rows.push([balance >= 0 ? "SURPLUS" : "DEFICIT", "", "", "", Math.abs(balance).toFixed(2)]); const csv = rows.map(r => r.map(c => '"' + c + '"').join(",")).join("\n"); navigator.clipboard.writeText(csv).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2500); }); };
-  const visibleCategories = view === "all" ? Object.keys(categories) : [view];
-  const isCurrentMonth = currentKey === todayKey;
+
+  const exportCSV = () => {
+    const rows = [["Month", getMonthLabel(key)], [], ["Item", "Category", "Amount", "Frequency", "Monthly", "Due Date", "Paid"]];
+    for (const item of items) {
+      if (item.multiDate && item.payments) {
+        item.payments.forEach((p, i) => rows.push([item.label + " (" + (i + 1) + ")", item.category, p.amount || "0", "One-off", (parseFloat(p.amount) || 0).toFixed(2), p.dueDate || "", p.paid ? "Yes" : "No"]));
+      } else {
+        rows.push([item.label, item.category, item.amount || "0", item.frequency, toMonthly(item.amount, item.frequency).toFixed(2), item.dueDate || "", item.paid ? "Yes" : "No"]);
+      }
+    }
+    rows.push([], ["TOTAL INCOME", "", "", "", totalIncome.toFixed(2)], ["TOTAL EXPENSES", "", "", "", totalExpenses.toFixed(2)], [balance >= 0 ? "SURPLUS" : "DEFICIT", "", "", "", Math.abs(balance).toFixed(2)]);
+    const csv = rows.map(r => r.map(c => '"' + c + '"').join(",")).join("\n");
+    navigator.clipboard.writeText(csv).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2500); });
+  };
+
+  const visCats = view === "all" ? Object.keys(cats) : [view];
   const dotColor = syncStatus === "error" ? "#ef4444" : (syncStatus === "saving" || syncStatus === "loading") ? "#fbbf24" : syncCode ? "#4ade80" : "#374151";
+
+  if (loading) return (
+    <div style={{ minHeight: "100vh", background: "#030712", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ color: "#6b7280", fontSize: 14 }}>
+        {syncCode ? "Loading from cloud..." : "No sync code set. Tap the sync icon to get started."}
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ minHeight: "100vh", background: "#030712", color: "#f9fafb", fontFamily: "'Inter', system-ui, sans-serif", padding: "16px 12px 40px" }}>
       <div style={{ maxWidth: 600, margin: "0 auto" }}>
 
-        {/* Header */}
         <div style={{ marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
             <div>
-              <div style={{ fontSize: 9, letterSpacing: "0.14em", color: "#6b7280", textTransform: "uppercase", marginBottom: 4 }}>Monthly Budget Tracker</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <button onClick={() => setShowMonthPicker(!showMonthPicker)} style={{ background: "none", border: "1.5px solid #374151", borderRadius: 10, color: "#f9fafb", padding: "4px 12px", fontSize: 22, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
-                  {getMonthLabel(currentKey)}<span style={{ fontSize: 12, color: "#6b7280" }}>v</span>
+              <div style={{ fontSize: 9, letterSpacing: "0.14em", color: "#6b7280", textTransform: "uppercase", marginBottom: 4 }}>Monthly Budget</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button onClick={() => setShowPicker(!showPicker)} style={{ background: "none", border: "1.5px solid #374151", borderRadius: 10, color: "#f9fafb", padding: "4px 12px", fontSize: 22, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+                  {getMonthLabel(key)}<span style={{ fontSize: 12, color: "#6b7280" }}>v</span>
                 </button>
-                {!isCurrentMonth && <button onClick={() => switchMonth(todayKey)} style={{ background: "#1f2937", border: "1px solid #374151", borderRadius: 8, color: "#9ca3af", padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>Today</button>}
+                {key !== today && <button onClick={() => switchMonth(today)} style={{ background: "#1f2937", border: "1px solid #374151", borderRadius: 8, color: "#9ca3af", padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>Today</button>}
               </div>
             </div>
-            <button onClick={() => { setSyncInput(syncCode); setShowSync(!showSync); }} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1a1f2e", border: "1.5px solid #2d3748", borderRadius: 20, padding: "7px 12px", cursor: "pointer", marginTop: 2, flexShrink: 0 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: dotColor }} />
+            <button onClick={() => { setSyncInput(syncCode); setShowSync(!showSync); }} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1a1f2e", border: "1.5px solid #2d3748", borderRadius: 20, padding: "7px 12px", cursor: "pointer", marginTop: 2 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: dotColor }} />
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={syncCode ? "#a78bfa" : "#6b7280"} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 2v6h-6" /><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M3 22v-6h6" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
               </svg>
             </button>
           </div>
 
-          {showMonthPicker && (
+          {showPicker && (
             <div style={{ background: "#111827", border: "1px solid #374151", borderRadius: 12, padding: 8, marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {monthOptions.map(key => <button key={key} onClick={() => switchMonth(key)} style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: key === currentKey ? "1.5px solid #4ade80" : "1.5px solid #374151", background: key === currentKey ? "#052e16" : "#1f2937", color: key === currentKey ? "#4ade80" : key === todayKey ? "#f9fafb" : "#9ca3af" }}>{getMonthLabel(key)}</button>)}
+              {monthOptions.map(k => <button key={k} onClick={() => switchMonth(k)} style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: k === key ? "1.5px solid #4ade80" : "1.5px solid #374151", background: k === key ? "#052e16" : "#1f2937", color: k === key ? "#4ade80" : k === today ? "#f9fafb" : "#9ca3af" }}>{getMonthLabel(k)}</button>)}
             </div>
           )}
 
-          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span>{paidCount} of {items.length} paid</span>
-            {!syncCode && <span style={{ fontSize: 10, color: "#4ade80" }}>* Auto-saving</span>}
-            {syncCode && syncStatus && <span style={{ fontSize: 10, color: dotColor }}>* {syncStatus === "saving" ? "Syncing..." : syncStatus === "loading" ? "Loading..." : syncStatus === "error" ? "Sync error" : "Synced"}</span>}
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
+            {paidCount} of {items.length} paid
+            {syncStatus === "saving" && <span style={{ marginLeft: 8, fontSize: 10, color: "#fbbf24" }}>* Syncing...</span>}
+            {syncStatus === "loading" && <span style={{ marginLeft: 8, fontSize: 10, color: "#fbbf24" }}>* Loading...</span>}
+            {syncStatus === "synced" && <span style={{ marginLeft: 8, fontSize: 10, color: "#4ade80" }}>* Synced</span>}
+            {syncStatus === "error" && <span style={{ marginLeft: 8, fontSize: 10, color: "#ef4444" }}>* Sync error</span>}
+            {!syncCode && <span style={{ marginLeft: 8, fontSize: 10, color: "#6b7280" }}>* No sync</span>}
           </div>
 
           {showSync && (
             <div style={{ background: "#111827", border: "1px solid #2d3748", borderRadius: 12, padding: 14, marginTop: 10 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#f9fafb", marginBottom: 4 }}>Cross-device Sync</div>
-              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 10 }}>Same code on all devices keeps data in sync.</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 10 }}>All data is stored in the cloud. Same code on all devices.</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
                 <input value={syncInput} onChange={e => setSyncInput(e.target.value)} placeholder="e.g. james-budget-2026" style={{ flex: 1, minWidth: 140, padding: "7px 10px", background: "#0f172a", border: "1px solid #374151", borderRadius: 8, color: "#f9fafb", fontSize: 13, fontFamily: "inherit", outline: "none" }} />
-                <button onClick={applySyncCode} style={{ background: "#3b0764", border: "1.5px solid #a78bfa", color: "#a78bfa", padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Save</button>
-                {syncCode && <button onClick={() => loadFromCloud(syncCode)} style={{ background: "#052e16", border: "1.5px solid #4ade80", color: "#4ade80", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Pull</button>}
-                {syncCode && <button onClick={pushToCloud} style={{ background: "#082f49", border: "1.5px solid #38bdf8", color: "#38bdf8", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Push</button>}
-                {syncCode && <button onClick={clearSyncCode} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "7px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Disable</button>}
+                <button onClick={applySyncCode} style={{ background: "#3b0764", border: "1.5px solid #a78bfa", color: "#a78bfa", padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Connect</button>
               </div>
-              {syncCode && <div style={{ fontSize: 10, color: "#4b5563", marginTop: 8 }}>Code: <span style={{ color: "#a78bfa" }}>{syncCode}</span></div>}
+              {syncCode && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button onClick={pullFromCloud} style={{ background: "#052e16", border: "1.5px solid #4ade80", color: "#4ade80", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Pull</button>
+                  <button onClick={pushToCloud} style={{ background: "#082f49", border: "1.5px solid #38bdf8", color: "#38bdf8", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Push</button>
+                  <button onClick={wipeAll} style={{ background: "#1c0606", border: "1px solid #991b1b", color: "#f87171", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Wipe All</button>
+                  <button onClick={() => { saveSyncCode(""); setSyncCode(""); setSyncInput(""); setShowSync(false); }} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "7px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Disconnect</button>
+                </div>
+              )}
+              {syncCode && <div style={{ fontSize: 10, color: "#4b5563", marginTop: 8 }}>Connected: <span style={{ color: "#a78bfa" }}>{syncCode}</span></div>}
             </div>
           )}
         </div>
 
-        {/* Summary Cards */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 20 }}>
           {[{ label: "Income", value: totalIncome, color: "#4ade80" }, { label: "Expenses", value: totalExpenses, color: "#f97316" }, { label: balance >= 0 ? "Surplus" : "Deficit", value: Math.abs(balance), color: balance >= 0 ? "#34d399" : "#ef4444" }].map(({ label, value, color }) => (
-            <div key={label} style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 10, padding: "10px 10px" }}>
-              <div style={{ fontSize: 9, color: "#6b7280", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+            <div key={label} style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 10, padding: "10px" }}>
+              <div style={{ fontSize: 9, color: "#6b7280", marginBottom: 3, textTransform: "uppercase" }}>{label}</div>
               <div style={{ fontSize: 15, fontWeight: 800, color }}>{fmt(value)}</div>
             </div>
           ))}
         </div>
 
-        {/* Category Tabs */}
         <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 16 }}>
           <button onClick={() => setView("all")} style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: view === "all" ? "1.5px solid #f9fafb" : "1.5px solid #374151", background: view === "all" ? "#1f2937" : "#111827", color: view === "all" ? "#f9fafb" : "#6b7280" }}>All</button>
-          {Object.keys(categories).map(cat => { const meta = CATEGORY_COLORS[cat] || { color: "#9ca3af", bg: "#111827", border: "#374151" }; return <button key={cat} onClick={() => setView(cat)} style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: view === cat ? "1.5px solid " + meta.color : "1.5px solid #374151", background: view === cat ? meta.bg : "#111827", color: view === cat ? meta.color : "#6b7280" }}>{cat}</button>; })}
+          {Object.keys(cats).map(cat => { const m = CATEGORY_COLORS[cat] || { color: "#9ca3af", bg: "#111827", border: "#374151" }; return <button key={cat} onClick={() => setView(cat)} style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: view === cat ? "1.5px solid " + m.color : "1.5px solid #374151", background: view === cat ? m.bg : "#111827", color: view === cat ? m.color : "#6b7280" }}>{cat}</button>; })}
         </div>
 
-        {/* Categories */}
-        {visibleCategories.map(cat => {
-          const meta = CATEGORY_COLORS[cat] || { color: "#9ca3af", bg: "#111827", border: "#374151" };
-          const catItems = categories[cat] || [];
-          const catTotal = monthlyByCategory[cat] || 0;
+        {visCats.map(cat => {
+          const m = CATEGORY_COLORS[cat] || { color: "#9ca3af", bg: "#111827", border: "#374151" };
+          const catItems = cats[cat] || [];
           return (
-            <div key={cat} style={{ background: "#0d1117", border: "1px solid " + meta.border, borderRadius: 12, marginBottom: 12, overflow: "hidden" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: meta.bg, borderBottom: "1px solid " + meta.border }}>
-                <span style={{ fontWeight: 700, fontSize: 12, color: meta.color, textTransform: "uppercase", letterSpacing: "0.06em" }}>{cat}</span>
-                <span style={{ fontWeight: 700, fontSize: 13, color: meta.color }}>{fmt(catTotal)}<span style={{ fontWeight: 400, fontSize: 10, color: "#6b7280", marginLeft: 3 }}>/mo</span></span>
+            <div key={cat} style={{ background: "#0d1117", border: "1px solid " + m.border, borderRadius: 12, marginBottom: 12, overflow: "hidden" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: m.bg, borderBottom: "1px solid " + m.border }}>
+                <span style={{ fontWeight: 700, fontSize: 12, color: m.color, textTransform: "uppercase" }}>{cat}</span>
+                <span style={{ fontWeight: 700, fontSize: 13, color: m.color }}>{fmt(catTotals[cat] || 0)}<span style={{ fontWeight: 400, fontSize: 10, color: "#6b7280", marginLeft: 3 }}>/mo</span></span>
               </div>
-
               {catItems.map((item, idx) => {
                 const isIncome = item.isIncome;
                 if (item.multiDate) {
-                  const apTotal = item.payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
-                  const allDone = item.payments.length > 0 && item.payments.every(p => p.paid);
-                  const entryLabel = isIncome ? "Pay" : "Payment";
-                  const dateLabel = isIncome ? "Pay Date" : "Due Date";
-                  const doneLabel = isIncome ? "RECVD" : "PAID";
+                  const total = item.payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+                  const done = item.payments.every(p => p.paid);
+                  const el = isIncome ? "Pay" : "Payment";
+                  const dl = isIncome ? "Pay Date" : "Due Date";
                   return (
                     <div key={item.id} style={{ borderTop: idx > 0 ? "1px solid #1a1f2e" : "none" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px 5px", background: allDone ? "rgba(74,222,128,0.04)" : "transparent" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px 5px", background: done ? "rgba(74,222,128,0.04)" : "transparent" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>{item.label}</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: m.color }}>{item.label}</span>
                           {isIncome && <span style={{ fontSize: 8, fontWeight: 700, color: "#4ade80", background: "#052e16", border: "1px solid #166534", padding: "1px 4px", borderRadius: 4 }}>INCOMING</span>}
-                          <span style={{ fontSize: 10, color: "#6b7280" }}>{item.payments.length} {entryLabel.toLowerCase()}{item.payments.length !== 1 ? "s" : ""}</span>
-                          {apTotal > 0 && <span style={{ fontSize: 11, color: "#f9fafb" }}>= {fmt(apTotal)}</span>}
+                          <span style={{ fontSize: 10, color: "#6b7280" }}>{item.payments.length} {el.toLowerCase()}{item.payments.length !== 1 ? "s" : ""}</span>
+                          {total > 0 && <span style={{ fontSize: 11, color: "#f9fafb" }}>= {fmt(total)}</span>}
                         </div>
-                        <button onClick={() => addPayment(item.id)} style={{ background: meta.bg, border: "1px solid " + meta.border, color: meta.color, padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add</button>
+                        <button onClick={() => addPay(item.id)} style={{ background: m.bg, border: "1px solid " + m.border, color: m.color, padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add</button>
                       </div>
                       {item.payments.map((p, pi) => (
                         <div key={p.id} style={{ padding: "6px 10px 6px 20px", background: p.paid ? "rgba(74,222,128,0.04)" : "#0a0e17", borderTop: "1px solid #1a1f2e", opacity: p.paid ? 0.6 : 1 }}>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                              <input type="checkbox" checked={p.paid} onChange={e => updatePayment(item.id, p.id, "paid", e.target.checked)} style={{ width: 15, height: 15, accentColor: meta.color, cursor: "pointer" }} />
-                              <span style={{ fontSize: 12, color: p.paid ? "#6b7280" : "#9ca3af", textDecoration: p.paid ? "line-through" : "none" }}>{entryLabel} {pi + 1}</span>
-                              {p.paid && <span style={{ fontSize: 9, fontWeight: 700, color: "#4ade80", background: "#052e16", padding: "1px 4px", borderRadius: 4 }}>{doneLabel}</span>}
+                              <input type="checkbox" checked={p.paid} onChange={e => updatePay(item.id, p.id, "paid", e.target.checked)} style={{ width: 15, height: 15, accentColor: m.color, cursor: "pointer" }} />
+                              <span style={{ fontSize: 12, color: p.paid ? "#6b7280" : "#9ca3af", textDecoration: p.paid ? "line-through" : "none" }}>{el} {pi + 1}</span>
+                              {p.paid && <span style={{ fontSize: 9, fontWeight: 700, color: "#4ade80", background: "#052e16", padding: "1px 4px", borderRadius: 4 }}>{isIncome ? "RECVD" : "PAID"}</span>}
                             </div>
-                            {item.payments.length > 1 && <button onClick={() => removePayment(item.id, p.id)} style={{ background: "none", border: "none", color: "#6b7280", fontSize: 16, cursor: "pointer", padding: "0 3px" }}>x</button>}
+                            {item.payments.length > 1 && <button onClick={() => removePay(item.id, p.id)} style={{ background: "none", border: "none", color: "#6b7280", fontSize: 16, cursor: "pointer", padding: "0 3px" }}>x</button>}
                           </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
                             <div>
                               <div style={{ fontSize: 8, color: "#4b5563", marginBottom: 2, textTransform: "uppercase" }}>Amount</div>
                               <div style={{ position: "relative" }}>
                                 <span style={{ position: "absolute", left: 7, top: "50%", transform: "translateY(-50%)", color: "#6b7280", fontSize: 12, pointerEvents: "none" }}>$</span>
-                                <input type="number" min="0" placeholder="0" value={p.amount} onChange={e => updatePayment(item.id, p.id, "amount", e.target.value)} style={{ width: "100%", padding: "7px 7px 7px 20px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: "#f9fafb", fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = meta.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
+                                <input type="number" min="0" placeholder="0" value={p.amount} onChange={e => updatePay(item.id, p.id, "amount", e.target.value)} style={{ width: "100%", padding: "7px 7px 7px 20px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: "#f9fafb", fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = m.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
                               </div>
                             </div>
                             <div>
-                              <div style={{ fontSize: 8, color: "#4b5563", marginBottom: 2, textTransform: "uppercase" }}>{dateLabel}</div>
-                              <input type="date" value={p.dueDate} onChange={e => updatePayment(item.id, p.id, "dueDate", e.target.value)} style={{ width: "100%", padding: "7px 5px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: p.dueDate ? "#f9fafb" : "#4b5563", fontSize: 12, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = meta.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
+                              <div style={{ fontSize: 8, color: "#4b5563", marginBottom: 2, textTransform: "uppercase" }}>{dl}</div>
+                              <input type="date" value={p.dueDate} onChange={e => updatePay(item.id, p.id, "dueDate", e.target.value)} style={{ width: "100%", padding: "7px 5px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: p.dueDate ? "#f9fafb" : "#4b5563", fontSize: 12, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = m.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
                             </div>
                           </div>
                         </div>
@@ -334,9 +408,9 @@ export default function BudgetTracker() {
                   <div key={item.id} style={{ padding: "9px 12px", background: item.paid ? "rgba(74,222,128,0.04)" : "transparent", borderTop: idx > 0 ? "1px solid #1a1f2e" : "none", opacity: item.paid ? 0.7 : 1 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <input type="checkbox" checked={item.paid} onChange={e => update(item.id, "paid", e.target.checked)} style={{ width: 16, height: 16, accentColor: meta.color, cursor: "pointer", flexShrink: 0 }} />
+                        <input type="checkbox" checked={item.paid} onChange={e => update(item.id, "paid", e.target.checked)} style={{ width: 16, height: 16, accentColor: m.color, cursor: "pointer", flexShrink: 0 }} />
                         <div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                             <span style={{ fontSize: 13, fontWeight: 600, color: item.paid ? "#6b7280" : "#f9fafb", textDecoration: item.paid ? "line-through" : "none" }}>{item.label}</span>
                             {isIncome && <span style={{ fontSize: 8, fontWeight: 700, color: "#4ade80", background: "#052e16", border: "1px solid #166534", padding: "1px 4px", borderRadius: 4 }}>INCOMING</span>}
                           </div>
@@ -350,7 +424,7 @@ export default function BudgetTracker() {
                         <div style={{ fontSize: 8, color: "#4b5563", marginBottom: 2, textTransform: "uppercase" }}>Amount</div>
                         <div style={{ position: "relative" }}>
                           <span style={{ position: "absolute", left: 7, top: "50%", transform: "translateY(-50%)", color: "#6b7280", fontSize: 12, pointerEvents: "none" }}>$</span>
-                          <input type="number" min="0" placeholder="0" value={item.amount} onChange={e => update(item.id, "amount", e.target.value)} style={{ width: "100%", padding: "7px 5px 7px 20px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: "#f9fafb", fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = meta.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
+                          <input type="number" min="0" placeholder="0" value={item.amount} onChange={e => update(item.id, "amount", e.target.value)} style={{ width: "100%", padding: "7px 5px 7px 20px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: "#f9fafb", fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = m.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
                         </div>
                       </div>
                       <div>
@@ -361,7 +435,7 @@ export default function BudgetTracker() {
                       </div>
                       <div>
                         <div style={{ fontSize: 8, color: "#4b5563", marginBottom: 2, textTransform: "uppercase" }}>{isIncome ? "Pay Day" : "Due Date"}</div>
-                        <input type="date" value={item.dueDate} onChange={e => update(item.id, "dueDate", e.target.value)} style={{ width: "100%", padding: "7px 3px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: item.dueDate ? "#f9fafb" : "#4b5563", fontSize: 10, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = meta.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
+                        <input type="date" value={item.dueDate} onChange={e => update(item.id, "dueDate", e.target.value)} style={{ width: "100%", padding: "7px 3px", background: "#0f172a", border: "1px solid #1f2937", borderRadius: 7, color: item.dueDate ? "#f9fafb" : "#4b5563", fontSize: 10, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = m.color} onBlur={e => e.target.style.borderColor = "#1f2937"} />
                       </div>
                     </div>
                   </div>
@@ -371,17 +445,9 @@ export default function BudgetTracker() {
           );
         })}
 
-        {/* Actions */}
         <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
           <button onClick={exportCSV} style={{ background: "#166534", border: "1.5px solid #4ade80", color: "#4ade80", padding: "9px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{copied ? "Copied!" : "Copy CSV"}</button>
           <button onClick={() => setItems(prev => prev.map(i => ({ ...i, paid: false, dueDate: "", payments: i.multiDate ? [newPayment()] : undefined })))} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "9px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Reset Month</button>
-          {syncCode && <button onClick={async () => {
-            if (!window.confirm("Wipe ALL data from cloud and all devices?")) return;
-            const empty = { [todayKey]: buildFreshItems(DEFAULT_ITEMS) };
-            setAllMonths(empty);
-            saveStorage(empty);
-            await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ syncCode, data: empty }) });
-          }} style={{ background: "#1c0606", border: "1px solid #991b1b", color: "#f87171", padding: "9px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Wipe All</button>}
         </div>
       </div>
     </div>
