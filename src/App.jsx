@@ -129,30 +129,37 @@ export default function BudgetTracker() {
     return () => clearTimeout(timer);
   }, [allMonths, syncCode]);
 
-  // On startup with sync code - compare timestamps and load cloud if newer
+  // On startup with sync code - load cloud if local is empty
   useEffect(() => {
     if (!syncCode) return;
-    setSyncStatus("loading");
+    const local = loadStorage();
+    const hasLocalData = Object.entries(local).some(([k, month]) =>
+      k !== "__ts" && Array.isArray(month) && month.some(item =>
+        (item.amount && item.amount !== "") ||
+        (item.payments && item.payments.some(p => p.amount && p.amount !== ""))
+      )
+    );
+    if (!hasLocalData) {
+      loadFromCloud(syncCode);
+      return;
+    }
+    // Also check if cloud is newer via timestamp
     fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
       .then(r => r.json())
       .then(cloudData => {
-        if (cloudData && typeof cloudData === "object" && Object.keys(cloudData).length > 0) {
-          const cloudTs = cloudData.__ts || 0;
-          const localTs = getLastSaved();
-          if (cloudTs > localTs) {
-            // Cloud is newer - use it
-            isSavingFromCloud.current = true;
-            const clean = { ...cloudData };
-            delete clean.__ts;
-            setAllMonths(clean);
-            saveStorage(clean);
-            setTimeout(() => { isSavingFromCloud.current = false; }, 3000);
-          }
+        if (!cloudData || typeof cloudData !== "object" || Object.keys(cloudData).length === 0) return;
+        const cloudTs = cloudData.__ts || 0;
+        const localTs = getLastSaved();
+        if (cloudTs > localTs) {
+          isSavingFromCloud.current = true;
+          const clean = { ...cloudData };
+          delete clean.__ts;
+          setAllMonths(clean);
+          saveStorage(clean);
+          setTimeout(() => { isSavingFromCloud.current = false; }, 3000);
         }
-        setSyncStatus("saved");
-        setTimeout(() => setSyncStatus(""), 2000);
       })
-      .catch(() => setSyncStatus(""));
+      .catch(() => {});
   }, [syncCode]);
 
   const loadFromCloud = (code) => {
