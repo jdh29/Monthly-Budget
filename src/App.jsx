@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 
 const FREQUENCY_OPTIONS = ["Weekly", "Fortnightly", "Monthly"];
 const toMonthly = (amount, frequency) => {
@@ -55,143 +55,132 @@ const rolloverItems = (prev, template) => template.map(item => {
 });
 
 const SYNC_KEY = "budget_sync_code";
-const loadSyncCode = () => { try { return localStorage.getItem(SYNC_KEY) || ""; } catch { return ""; } };
-const saveSyncCode = (c) => { try { localStorage.setItem(SYNC_KEY, c); } catch {} };
+const getSyncCode = () => { try { return localStorage.getItem(SYNC_KEY) || ""; } catch { return ""; } };
+const setSyncCode = (c) => { try { localStorage.setItem(SYNC_KEY, c); } catch {} };
+
+const cloudSave = (syncCode, data) => fetch("/api/save", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ syncCode, data }),
+});
+
+const cloudLoad = (syncCode) => fetch("/api/load?syncCode=" + encodeURIComponent(syncCode)).then(r => r.json());
 
 export default function App() {
   const today = getMonthKey(new Date());
   const [months, setMonths] = useState({ [today]: buildFreshItems(DEFAULT_ITEMS) });
-  const [key, setKey] = useState(today);
+  const [monthKey, setMonthKey] = useState(today);
   const [view, setView] = useState("all");
   const [showPicker, setShowPicker] = useState(false);
-  const [syncCode, setSyncCode] = useState(loadSyncCode);
-  const [syncInput, setSyncInput] = useState(loadSyncCode);
+  const [syncCode, setSyncCodeState] = useState(getSyncCode);
+  const [syncInput, setSyncInput] = useState(getSyncCode);
   const [showSync, setShowSync] = useState(false);
-  const [syncStatus, setSyncStatus] = useState("");
+  const [status, setStatus] = useState("idle"); // idle, loading, saving, saved, error
   const [copied, setCopied] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const saving = useRef(false);
+  const [ready, setReady] = useState(false);
+  const saveTimer = React.useRef(null);
+  const isFirstLoad = React.useRef(true);
 
-  const items = months[key] || buildFreshItems(DEFAULT_ITEMS);
+  const items = months[monthKey] || buildFreshItems(DEFAULT_ITEMS);
 
-  // Load from cloud on startup
+  // On startup: load from cloud once
   useEffect(() => {
-    if (!syncCode) { setLoading(false); return; }
-    setSyncStatus("loading");
-    fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
-      .then(r => r.json())
+    const code = getSyncCode();
+    if (!code) { setReady(true); return; }
+    setStatus("loading");
+    cloudLoad(code)
       .then(d => {
         if (d && typeof d === "object" && Object.keys(d).length > 0) {
           setMonths(d);
         }
-        setSyncStatus("synced");
-        setTimeout(() => setSyncStatus(""), 2000);
+        setStatus("saved");
+        setTimeout(() => setStatus("idle"), 2000);
       })
-      .catch(() => setSyncStatus(""))
-      .finally(() => setLoading(false));
+      .catch(() => setStatus("idle"))
+      .finally(() => { setReady(true); isFirstLoad.current = false; });
   }, []);
 
-  const lastSavedAt = useRef(0);
-
-  // Auto save to cloud on every change (debounced)
+  // After startup load, auto-save on every change
   useEffect(() => {
-    if (!syncCode || loading || saving.current) return;
-    setSyncStatus("saving");
-    const t = setTimeout(() => {
-      saving.current = true;
-      fetch("/api/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syncCode, data: months }),
-      })
-        .then(r => { 
-          if (r.ok) { 
-            lastSavedAt.current = Date.now();
-            setSyncStatus("synced");
-          } else {
-            setSyncStatus("error");
-          }
-        })
-        .catch(() => setSyncStatus("error"))
-        .finally(() => {
-          saving.current = false;
-          setTimeout(() => setSyncStatus(""), 2000);
-        });
-    }, 1000);
-    return () => clearTimeout(t);
-  }, [months, syncCode, loading]);
+    if (!ready || !syncCode || isFirstLoad.current) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setStatus("saving");
+    saveTimer.current = setTimeout(() => {
+      cloudSave(syncCode, months)
+        .then(r => setStatus(r.ok ? "saved" : "error"))
+        .catch(() => setStatus("error"))
+        .finally(() => setTimeout(() => setStatus("idle"), 2000));
+    }, 1500);
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, [months]);
 
-  // No polling - data loads on startup and saves on change
-
-  const pushToCloud = () => {
-    if (!syncCode) return;
-    setSyncStatus("saving");
-    saving.current = true;
-    fetch("/api/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ syncCode, data: months }),
-    })
-      .then(r => setSyncStatus(r.ok ? "synced" : "error"))
-      .catch(() => setSyncStatus("error"))
-      .finally(() => { saving.current = false; setTimeout(() => setSyncStatus(""), 2000); });
-  };
-
-  const pullFromCloud = () => {
-    if (!syncCode) return;
-    setSyncStatus("loading");
-    fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
-      .then(r => r.json())
+  const connect = () => {
+    const code = syncInput.trim();
+    if (!code) return;
+    setSyncCode(code);
+    setSyncCodeState(code);
+    setStatus("loading");
+    cloudLoad(code)
       .then(d => {
         if (d && typeof d === "object" && Object.keys(d).length > 0) {
-          saving.current = true;
           setMonths(d);
-          setTimeout(() => { saving.current = false; }, 2000);
         }
-        setSyncStatus("synced");
-        setTimeout(() => setSyncStatus(""), 2000);
+        setStatus("saved");
+        setTimeout(() => setStatus("idle"), 2000);
       })
-      .catch(() => setSyncStatus("error"));
+      .catch(() => setStatus("error"));
+    setShowSync(false);
+  };
+
+  const pull = () => {
+    if (!syncCode) return;
+    setStatus("loading");
+    cloudLoad(syncCode)
+      .then(d => {
+        if (d && typeof d === "object" && Object.keys(d).length > 0) {
+          isFirstLoad.current = true;
+          setMonths(d);
+          setTimeout(() => { isFirstLoad.current = false; }, 2000);
+        }
+        setStatus("saved");
+        setTimeout(() => setStatus("idle"), 2000);
+      })
+      .catch(() => setStatus("error"));
+  };
+
+  const push = () => {
+    if (!syncCode) return;
+    setStatus("saving");
+    cloudSave(syncCode, months)
+      .then(r => setStatus(r.ok ? "saved" : "error"))
+      .catch(() => setStatus("error"))
+      .finally(() => setTimeout(() => setStatus("idle"), 2000));
   };
 
   const wipeAll = () => {
     const empty = { [today]: buildFreshItems(DEFAULT_ITEMS) };
-    saving.current = true;
+    isFirstLoad.current = true;
     setMonths(empty);
-    setSyncStatus("saving");
-    fetch("/api/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ syncCode, data: empty }),
-    })
-      .then(() => { setSyncStatus("synced"); setTimeout(() => setSyncStatus(""), 2000); })
-      .catch(() => setSyncStatus("error"))
-      .finally(() => { setTimeout(() => { saving.current = false; }, 2000); });
+    cloudSave(syncCode, empty)
+      .then(() => { setStatus("saved"); setTimeout(() => { setStatus("idle"); isFirstLoad.current = false; }, 2000); })
+      .catch(() => setStatus("error"));
   };
 
-  const applySyncCode = () => {
-    const c = syncInput.trim();
-    if (!c) return;
-    saveSyncCode(c);
-    setSyncCode(c);
-    setSyncStatus("loading");
-    fetch("/api/load?syncCode=" + encodeURIComponent(c))
-      .then(r => r.json())
-      .then(d => {
-        if (d && typeof d === "object" && Object.keys(d).length > 0) {
-          setMonths(d);
-        }
-        setSyncStatus("synced");
-        setTimeout(() => setSyncStatus(""), 2000);
-      })
-      .catch(() => setSyncStatus("error"));
+  const disconnect = () => {
+    setSyncCode("");
+    setSyncCodeState("");
+    setSyncInput("");
     setShowSync(false);
+    setStatus("idle");
   };
 
-  const setItems = (fn) => setMonths(prev => {
-    const cur = prev[key] || buildFreshItems(DEFAULT_ITEMS);
-    return { ...prev, [key]: typeof fn === "function" ? fn(cur) : fn };
-  });
+  const setItems = (fn) => {
+    isFirstLoad.current = false;
+    setMonths(prev => {
+      const cur = prev[monthKey] || buildFreshItems(DEFAULT_ITEMS);
+      return { ...prev, [monthKey]: typeof fn === "function" ? fn(cur) : fn };
+    });
+  };
 
   const update = (id, field, val) => setItems(prev => prev.map(i => i.id === id ? { ...i, [field]: val } : i));
   const addPay = (id) => setItems(prev => prev.map(i => i.id === id ? { ...i, payments: [...(i.payments || []), newPayment()] } : i));
@@ -207,7 +196,7 @@ export default function App() {
       }
       return prev;
     });
-    setKey(k);
+    setMonthKey(k);
     setShowPicker(false);
     setView("all");
   };
@@ -243,7 +232,7 @@ export default function App() {
   const paidCount = items.filter(i => i.multiDate ? i.payments?.every(p => p.paid) : i.paid).length;
 
   const exportCSV = () => {
-    const rows = [["Month", getMonthLabel(key)], [], ["Item", "Category", "Amount", "Frequency", "Monthly", "Due Date", "Paid"]];
+    const rows = [["Month", getMonthLabel(monthKey)], [], ["Item", "Category", "Amount", "Frequency", "Monthly", "Due Date", "Paid"]];
     for (const item of items) {
       if (item.multiDate && item.payments) {
         item.payments.forEach((p, i) => rows.push([item.label + " (" + (i + 1) + ")", item.category, p.amount || "0", "One-off", (parseFloat(p.amount) || 0).toFixed(2), p.dueDate || "", p.paid ? "Yes" : "No"]));
@@ -257,13 +246,12 @@ export default function App() {
   };
 
   const visCats = view === "all" ? Object.keys(cats) : [view];
-  const dotColor = syncStatus === "error" ? "#ef4444" : (syncStatus === "saving" || syncStatus === "loading") ? "#fbbf24" : syncCode ? "#4ade80" : "#374151";
+  const dotColor = status === "error" ? "#ef4444" : (status === "saving" || status === "loading") ? "#fbbf24" : syncCode ? "#4ade80" : "#374151";
+  const statusText = status === "saving" ? "Saving..." : status === "loading" ? "Loading..." : status === "error" ? "Error" : status === "saved" ? "Saved" : "";
 
-  if (loading) return (
+  if (!ready) return (
     <div style={{ minHeight: "100vh", background: "#030712", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ color: "#6b7280", fontSize: 14 }}>
-        {syncCode ? "Loading from cloud..." : "No sync code set. Tap the sync icon to get started."}
-      </div>
+      <div style={{ color: "#6b7280", fontSize: 14 }}>Loading...</div>
     </div>
   );
 
@@ -277,9 +265,9 @@ export default function App() {
               <div style={{ fontSize: 9, letterSpacing: "0.14em", color: "#6b7280", textTransform: "uppercase", marginBottom: 4 }}>Monthly Budget</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <button onClick={() => setShowPicker(!showPicker)} style={{ background: "none", border: "1.5px solid #374151", borderRadius: 10, color: "#f9fafb", padding: "4px 12px", fontSize: 22, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
-                  {getMonthLabel(key)}<span style={{ fontSize: 12, color: "#6b7280" }}>v</span>
+                  {getMonthLabel(monthKey)}<span style={{ fontSize: 12, color: "#6b7280" }}>v</span>
                 </button>
-                {key !== today && <button onClick={() => switchMonth(today)} style={{ background: "#1f2937", border: "1px solid #374151", borderRadius: 8, color: "#9ca3af", padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>Today</button>}
+                {monthKey !== today && <button onClick={() => switchMonth(today)} style={{ background: "#1f2937", border: "1px solid #374151", borderRadius: 8, color: "#9ca3af", padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>Today</button>}
               </div>
             </div>
             <button onClick={() => { setSyncInput(syncCode); setShowSync(!showSync); }} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1a1f2e", border: "1.5px solid #2d3748", borderRadius: 20, padding: "7px 12px", cursor: "pointer", marginTop: 2 }}>
@@ -292,33 +280,30 @@ export default function App() {
 
           {showPicker && (
             <div style={{ background: "#111827", border: "1px solid #374151", borderRadius: 12, padding: 8, marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {monthOptions.map(k => <button key={k} onClick={() => switchMonth(k)} style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: k === key ? "1.5px solid #4ade80" : "1.5px solid #374151", background: k === key ? "#052e16" : "#1f2937", color: k === key ? "#4ade80" : k === today ? "#f9fafb" : "#9ca3af" }}>{getMonthLabel(k)}</button>)}
+              {monthOptions.map(k => <button key={k} onClick={() => switchMonth(k)} style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: k === monthKey ? "1.5px solid #4ade80" : "1.5px solid #374151", background: k === monthKey ? "#052e16" : "#1f2937", color: k === monthKey ? "#4ade80" : k === today ? "#f9fafb" : "#9ca3af" }}>{getMonthLabel(k)}</button>)}
             </div>
           )}
 
-          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-            {paidCount} of {items.length} paid
-            {syncStatus === "saving" && <span style={{ marginLeft: 8, fontSize: 10, color: "#fbbf24" }}>* Syncing...</span>}
-            {syncStatus === "loading" && <span style={{ marginLeft: 8, fontSize: 10, color: "#fbbf24" }}>* Loading...</span>}
-            {syncStatus === "synced" && <span style={{ marginLeft: 8, fontSize: 10, color: "#4ade80" }}>* Synced</span>}
-            {syncStatus === "error" && <span style={{ marginLeft: 8, fontSize: 10, color: "#ef4444" }}>* Sync error</span>}
-            {!syncCode && <span style={{ marginLeft: 8, fontSize: 10, color: "#6b7280" }}>* No sync</span>}
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+            <span>{paidCount} of {items.length} paid</span>
+            {statusText && <span style={{ fontSize: 10, color: dotColor }}>* {statusText}</span>}
+            {!syncCode && !statusText && <span style={{ fontSize: 10, color: "#6b7280" }}>* No sync</span>}
           </div>
 
           {showSync && (
             <div style={{ background: "#111827", border: "1px solid #2d3748", borderRadius: 12, padding: 14, marginTop: 10 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#f9fafb", marginBottom: 4 }}>Cross-device Sync</div>
-              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 10 }}>All data is stored in the cloud. Same code on all devices.</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#f9fafb", marginBottom: 4 }}>Cloud Sync</div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 10 }}>Enter your sync code to connect all devices.</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
                 <input value={syncInput} onChange={e => setSyncInput(e.target.value)} placeholder="e.g. james-budget-2026" style={{ flex: 1, minWidth: 140, padding: "7px 10px", background: "#0f172a", border: "1px solid #374151", borderRadius: 8, color: "#f9fafb", fontSize: 13, fontFamily: "inherit", outline: "none" }} />
-                <button onClick={applySyncCode} style={{ background: "#3b0764", border: "1.5px solid #a78bfa", color: "#a78bfa", padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Connect</button>
+                <button onClick={connect} style={{ background: "#3b0764", border: "1.5px solid #a78bfa", color: "#a78bfa", padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Connect</button>
               </div>
               {syncCode && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button onClick={pullFromCloud} style={{ background: "#052e16", border: "1.5px solid #4ade80", color: "#4ade80", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Pull</button>
-                  <button onClick={pushToCloud} style={{ background: "#082f49", border: "1.5px solid #38bdf8", color: "#38bdf8", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Push</button>
+                  <button onClick={pull} style={{ background: "#052e16", border: "1.5px solid #4ade80", color: "#4ade80", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Pull</button>
+                  <button onClick={push} style={{ background: "#082f49", border: "1.5px solid #38bdf8", color: "#38bdf8", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Push</button>
                   <button onClick={wipeAll} style={{ background: "#1c0606", border: "1px solid #991b1b", color: "#f87171", padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Wipe All</button>
-                  <button onClick={() => { saveSyncCode(""); setSyncCode(""); setSyncInput(""); setShowSync(false); }} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "7px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Disconnect</button>
+                  <button onClick={disconnect} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "7px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Disconnect</button>
                 </div>
               )}
               {syncCode && <div style={{ fontSize: 10, color: "#4b5563", marginTop: 8 }}>Connected: <span style={{ color: "#a78bfa" }}>{syncCode}</span></div>}
@@ -353,12 +338,11 @@ export default function App() {
                 const isIncome = item.isIncome;
                 if (item.multiDate) {
                   const total = item.payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
-                  const done = item.payments.every(p => p.paid);
                   const el = isIncome ? "Pay" : "Payment";
                   const dl = isIncome ? "Pay Date" : "Due Date";
                   return (
                     <div key={item.id} style={{ borderTop: idx > 0 ? "1px solid #1a1f2e" : "none" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px 5px", background: done ? "rgba(74,222,128,0.04)" : "transparent" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px 5px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
                           <span style={{ fontSize: 13, fontWeight: 700, color: m.color }}>{item.label}</span>
                           {isIncome && <span style={{ fontSize: 8, fontWeight: 700, color: "#4ade80", background: "#052e16", border: "1px solid #166534", padding: "1px 4px", borderRadius: 4 }}>INCOMING</span>}
@@ -439,7 +423,7 @@ export default function App() {
 
         <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
           <button onClick={exportCSV} style={{ background: "#166534", border: "1.5px solid #4ade80", color: "#4ade80", padding: "9px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{copied ? "Copied!" : "Copy CSV"}</button>
-          <button onClick={() => setItems(prev => prev.map(i => ({ ...i, paid: false, dueDate: "", payments: i.multiDate ? [newPayment()] : undefined })))} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "9px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Reset Month</button>
+          <button onClick={() => { isFirstLoad.current = false; setItems(prev => prev.map(i => ({ ...i, paid: false, dueDate: "", payments: i.multiDate ? [newPayment()] : undefined }))); }} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "9px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Reset Month</button>
         </div>
       </div>
     </div>
