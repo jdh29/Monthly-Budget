@@ -53,7 +53,21 @@ const rolloverItems = (prevItems, template) => template.map(item => {
 const STORAGE_KEY = "budget_tracker_v2";
 const SYNC_CODE_KEY = "budget_sync_code";
 const LAST_SAVED_KEY = "budget_last_saved";
-const loadStorage = () => { try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : {}; } catch { return {}; } };
+const loadStorage = () => {
+  try {
+    // Try v2 first
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+    // Fall back to v1 and migrate
+    const oldRaw = localStorage.getItem("budget_tracker_v1");
+    if (oldRaw) {
+      const data = JSON.parse(oldRaw);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      return data;
+    }
+    return {};
+  } catch { return {}; }
+};
 const saveStorage = (data) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); localStorage.setItem(LAST_SAVED_KEY, Date.now().toString()); } catch {} };
 const loadSyncCode = () => { try { return localStorage.getItem(SYNC_CODE_KEY) || ""; } catch { return ""; } };
 const saveSyncCode = (code) => { try { localStorage.setItem(SYNC_CODE_KEY, code); } catch {} };
@@ -79,7 +93,6 @@ export default function BudgetTracker() {
   const [showSync, setShowSync] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
   const isSavingFromCloud = useRef(false);
-  const isInitialLoad = useRef(true);
 
   const items = allMonths[currentKey] || buildFreshItems(DEFAULT_ITEMS);
 
@@ -92,7 +105,6 @@ export default function BudgetTracker() {
   useEffect(() => {
     if (!syncCode) return;
     if (isSavingFromCloud.current) return;
-    if (isInitialLoad.current) return;
     setSyncStatus("saving");
     const timer = setTimeout(async () => {
       try {
@@ -111,7 +123,7 @@ export default function BudgetTracker() {
 
   // On startup with sync code - compare timestamps and load cloud if newer
   useEffect(() => {
-    if (!syncCode) { isInitialLoad.current = false; return; }
+    if (!syncCode) return;
     setSyncStatus("loading");
     fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
       .then(r => r.json())
@@ -132,8 +144,7 @@ export default function BudgetTracker() {
         setSyncStatus("saved");
         setTimeout(() => setSyncStatus(""), 2000);
       })
-      .catch(() => setSyncStatus(""))
-      .finally(() => { isInitialLoad.current = false; });
+      .catch(() => setSyncStatus(""));
   }, [syncCode]);
 
   const loadFromCloud = (code) => {
@@ -155,7 +166,7 @@ export default function BudgetTracker() {
       .catch(() => setSyncStatus("error"));
   };
 
-  const pushToCloud = async () => {
+  const applySyncCode = () => { const code = syncInput.trim(); if (!code) return; saveSyncCode(code); setSyncCode(code); setShowSync(false); };
     if (!syncCode) return;
     setSyncStatus("saving");
     try {
@@ -171,7 +182,29 @@ export default function BudgetTracker() {
     setTimeout(() => setSyncStatus(""), 2000);
   };
 
-  const applySyncCode = () => { const code = syncInput.trim(); if (!code) return; saveSyncCode(code); setSyncCode(code); setShowSync(false); };
+  // Poll cloud every 30 seconds for newer data
+  useEffect(() => {
+    if (!syncCode) return;
+    const interval = setInterval(async () => {
+      if (isSavingFromCloud.current) return;
+      try {
+        const res = await fetch("/api/load?syncCode=" + encodeURIComponent(syncCode));
+        const cloudData = await res.json();
+        if (!cloudData || typeof cloudData !== "object" || Object.keys(cloudData).length === 0) return;
+        const cloudTs = cloudData.__ts || 0;
+        const localTs = getLastSaved();
+        if (cloudTs > localTs) {
+          isSavingFromCloud.current = true;
+          const clean = { ...cloudData };
+          delete clean.__ts;
+          setAllMonths(clean);
+          saveStorage(clean);
+          setTimeout(() => { isSavingFromCloud.current = false; }, 3000);
+        }
+      } catch {}
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [syncCode]);
   const clearSyncCode = () => { saveSyncCode(""); setSyncCode(""); setSyncInput(""); setShowSync(false); };
   const setItems = (updater) => { setAllMonths(prev => { const current = prev[currentKey] || buildFreshItems(DEFAULT_ITEMS); const updated = typeof updater === "function" ? updater(current) : updater; return { ...prev, [currentKey]: updated }; }); };
   const update = (id, field, value) => { setItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item)); };
