@@ -372,9 +372,16 @@ export default function BudgetTracker() {
         })}
 
         {/* Actions */}
-        <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 8 }}>
+        <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
           <button onClick={exportCSV} style={{ background: "#166534", border: "1.5px solid #4ade80", color: "#4ade80", padding: "9px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{copied ? "Copied!" : "Copy CSV"}</button>
           <button onClick={() => setItems(prev => prev.map(i => ({ ...i, paid: false, dueDate: "", payments: i.multiDate ? [newPayment()] : undefined })))} style={{ background: "none", border: "1px solid #374151", color: "#6b7280", padding: "9px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Reset Month</button>
+          {syncCode && <button onClick={async () => {
+            if (!window.confirm("Wipe ALL data from cloud and all devices?")) return;
+            const empty = { [todayKey]: buildFreshItems(DEFAULT_ITEMS) };
+            setAllMonths(empty);
+            saveStorage(empty);
+            await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ syncCode, data: empty }) });
+          }} style={{ background: "#1c0606", border: "1px solid #991b1b", color: "#f87171", padding: "9px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Wipe All</button>}
         </div>
       </div>
     </div>
