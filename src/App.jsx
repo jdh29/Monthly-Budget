@@ -175,6 +175,9 @@ export default function BudgetTracker() {
   };
 
   const applySyncCode = () => { const code = syncInput.trim(); if (!code) return; saveSyncCode(code); setSyncCode(code); setShowSync(false); };
+  const clearSyncCode = () => { saveSyncCode(""); setSyncCode(""); setSyncInput(""); setShowSync(false); };
+
+  const pushToCloud = async () => {
     if (!syncCode) return;
     setSyncStatus("saving");
     try {
@@ -213,7 +216,6 @@ export default function BudgetTracker() {
     }, 30000);
     return () => clearInterval(interval);
   }, [syncCode]);
-  const clearSyncCode = () => { saveSyncCode(""); setSyncCode(""); setSyncInput(""); setShowSync(false); };
   const setItems = (updater) => { setAllMonths(prev => { const current = prev[currentKey] || buildFreshItems(DEFAULT_ITEMS); const updated = typeof updater === "function" ? updater(current) : updater; return { ...prev, [currentKey]: updated }; }); };
   const update = (id, field, value) => { setItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item)); };
   const addPayment = (itemId) => { setItems(prev => prev.map(item => item.id === itemId ? { ...item, payments: [...(item.payments || []), newPayment()] } : item)); };
