@@ -91,6 +91,8 @@ export default function App() {
       .finally(() => setLoading(false));
   }, []);
 
+  const lastSavedAt = useRef(0);
+
   // Auto save to cloud on every change (debounced)
   useEffect(() => {
     if (!syncCode || loading || saving.current) return;
@@ -102,7 +104,14 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ syncCode, data: months }),
       })
-        .then(r => { setSyncStatus(r.ok ? "synced" : "error"); })
+        .then(r => { 
+          if (r.ok) { 
+            lastSavedAt.current = Date.now();
+            setSyncStatus("synced");
+          } else {
+            setSyncStatus("error");
+          }
+        })
         .catch(() => setSyncStatus("error"))
         .finally(() => {
           saving.current = false;
@@ -112,11 +121,13 @@ export default function App() {
     return () => clearTimeout(t);
   }, [months, syncCode, loading]);
 
-  // Poll cloud every 30 seconds
+  // Poll cloud every 30 seconds - only update if we haven't saved recently
   useEffect(() => {
     if (!syncCode) return;
     const interval = setInterval(() => {
       if (saving.current) return;
+      // Don't overwrite if we saved in the last 10 seconds
+      if (Date.now() - lastSavedAt.current < 10000) return;
       fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
         .then(r => r.json())
         .then(d => {
