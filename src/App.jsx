@@ -52,7 +52,6 @@ const rolloverItems = (prevItems, template) => template.map(item => {
 });
 const STORAGE_KEY = "budget_tracker_v2";
 const SYNC_CODE_KEY = "budget_sync_code";
-const LAST_SAVED_KEY = "budget_last_saved";
 const loadStorage = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -76,10 +75,9 @@ const loadStorage = () => {
     return v2;
   } catch { return {}; }
 };
-const saveStorage = (data) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); localStorage.setItem(LAST_SAVED_KEY, Date.now().toString()); } catch {} };
+const saveStorage = (data) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {} };
 const loadSyncCode = () => { try { return localStorage.getItem(SYNC_CODE_KEY) || ""; } catch { return ""; } };
 const saveSyncCode = (code) => { try { localStorage.setItem(SYNC_CODE_KEY, code); } catch {} };
-const getLastSaved = () => { try { return parseInt(localStorage.getItem(LAST_SAVED_KEY) || "0"); } catch { return 0; } };
 
 export default function BudgetTracker() {
   const todayKey = getMonthKey(new Date());
@@ -116,11 +114,10 @@ export default function BudgetTracker() {
     setSyncStatus("saving");
     const timer = setTimeout(async () => {
       try {
-        const payload = { ...allMonths, __ts: Date.now() };
         const res = await fetch("/api/save", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ syncCode, data: payload }),
+          body: JSON.stringify({ syncCode, data: allMonths }),
         });
         setSyncStatus(res.ok ? "saved" : "error");
       } catch { setSyncStatus("error"); }
@@ -129,37 +126,10 @@ export default function BudgetTracker() {
     return () => clearTimeout(timer);
   }, [allMonths, syncCode]);
 
-  // On startup with sync code - load cloud if local is empty
+  // On startup - always load from cloud if sync code set
   useEffect(() => {
     if (!syncCode) return;
-    const local = loadStorage();
-    const hasLocalData = Object.entries(local).some(([k, month]) =>
-      k !== "__ts" && Array.isArray(month) && month.some(item =>
-        (item.amount && item.amount !== "") ||
-        (item.payments && item.payments.some(p => p.amount && p.amount !== ""))
-      )
-    );
-    if (!hasLocalData) {
-      loadFromCloud(syncCode);
-      return;
-    }
-    // Also check if cloud is newer via timestamp
-    fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
-      .then(r => r.json())
-      .then(cloudData => {
-        if (!cloudData || typeof cloudData !== "object" || Object.keys(cloudData).length === 0) return;
-        const cloudTs = cloudData.__ts || 0;
-        const localTs = getLastSaved();
-        if (cloudTs > localTs) {
-          isSavingFromCloud.current = true;
-          const clean = { ...cloudData };
-          delete clean.__ts;
-          setAllMonths(clean);
-          saveStorage(clean);
-          setTimeout(() => { isSavingFromCloud.current = false; }, 3000);
-        }
-      })
-      .catch(() => {});
+    loadFromCloud(syncCode);
   }, [syncCode]);
 
   const loadFromCloud = (code) => {
@@ -169,10 +139,8 @@ export default function BudgetTracker() {
       .then(data => {
         if (data && typeof data === "object" && Object.keys(data).length > 0) {
           isSavingFromCloud.current = true;
-          const clean = { ...data };
-          delete clean.__ts;
-          setAllMonths(clean);
-          saveStorage(clean);
+          setAllMonths(data);
+          saveStorage(data);
           setTimeout(() => { isSavingFromCloud.current = false; }, 3000);
         }
         setSyncStatus("saved");
@@ -188,37 +156,34 @@ export default function BudgetTracker() {
     if (!syncCode) return;
     setSyncStatus("saving");
     try {
-      const payload = { ...allMonths, __ts: Date.now() };
       const res = await fetch("/api/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syncCode, data: payload }),
+        body: JSON.stringify({ syncCode, data: allMonths }),
       });
-      if (res.ok) { localStorage.setItem(LAST_SAVED_KEY, payload.__ts.toString()); setSyncStatus("saved"); }
-      else setSyncStatus("error");
+      setSyncStatus(res.ok ? "saved" : "error");
     } catch { setSyncStatus("error"); }
     setTimeout(() => setSyncStatus(""), 2000);
   };
 
-  // Poll cloud every 30 seconds for newer data
+  // Poll cloud every 30 seconds and always update local with cloud data
   useEffect(() => {
     if (!syncCode) return;
-    const interval = setInterval(async () => {
+    const interval = setInterval(() => {
       if (isSavingFromCloud.current) return;
-      try {
-        const res = await fetch("/api/load?syncCode=" + encodeURIComponent(syncCode));
-        const cloudData = await res.json();
-        if (!cloudData || typeof cloudData !== "object" || Object.keys(cloudData).length === 0) return;
-        const cloudTs = cloudData.__ts || 0;
-        const localTs = getLastSaved();
-        if (cloudTs > localTs) {
+      fetch("/api/load?syncCode=" + encodeURIComponent(syncCode))
+        .then(r => r.json())
+        .then(cloudData => {
+          if (!cloudData || typeof cloudData !== "object" || Object.keys(cloudData).length === 0) return;
           isSavingFromCloud.current = true;
-          const clean = { ...cloudData };
-          delete clean.__ts;
-          setAllMonths(clean);
-          saveStorage(clean);
+          setAllMonths(cloudData);
+          saveStorage(cloudData);
           setTimeout(() => { isSavingFromCloud.current = false; }, 3000);
-        }
+        })
+        .catch(() => {});
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [syncCode]);
       } catch {}
     }, 30000);
     return () => clearInterval(interval);
