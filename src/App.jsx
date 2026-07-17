@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
+import { pull, push, subscribeToChanges } from "./sync";
 
 const FREQUENCY_OPTIONS = ["Weekly", "Fortnightly", "Monthly"];
 const toMonthly = (amount, frequency) => {
@@ -71,35 +72,38 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [ready, setReady] = useState(false);
 
-  // These refs track cloud operations to prevent conflicts
   const cloudLoading = useRef(false);
   const saveTimer = useRef(null);
 
   const items = months[monthKey] || buildFreshItems(DEFAULT_ITEMS);
 
-  // Load from cloud ONCE on startup
+  // Load from Supabase whenever syncCode changes (including on first mount), and subscribe to live updates
   useEffect(() => {
-    const code = getSyncCode();
-    if (!code) { setReady(true); return; }
+    if (!syncCode) { setReady(true); return; }
     cloudLoading.current = true;
     setStatus("loading");
-    fetch("/api/load?syncCode=" + encodeURIComponent(code))
-      .then(r => r.json())
-      .then(d => {
-        if (d && typeof d === "object" && Object.keys(d).length > 0) {
-          setMonths(d);
+    pull(syncCode)
+      .then(row => {
+        if (row && row.data && Object.keys(row.data).length > 0) {
+          setMonths(row.data);
         }
         setStatus("idle");
       })
       .catch(() => setStatus("idle"))
       .finally(() => {
-        // Wait 2 seconds before allowing auto-save to fire
         setTimeout(() => {
           cloudLoading.current = false;
           setReady(true);
         }, 2000);
       });
-  }, []); // Empty array = runs ONCE only
+
+    const unsubscribe = subscribeToChanges(syncCode, (remoteData) => {
+      cloudLoading.current = true;
+      setMonths(remoteData);
+      setTimeout(() => { cloudLoading.current = false; }, 2000);
+    });
+    return unsubscribe;
+  }, [syncCode]);
 
   // Auto-save: only fires when ready AND not loading from cloud
   useEffect(() => {
@@ -108,12 +112,8 @@ export default function App() {
     saveTimer.current = setTimeout(() => {
       if (cloudLoading.current) return;
       setStatus("saving");
-      fetch("/api/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syncCode, data: months }),
-      })
-        .then(r => setStatus(r.ok ? "saved" : "error"))
+      push(syncCode, months)
+        .then(() => setStatus("saved"))
         .catch(() => setStatus("error"))
         .finally(() => setTimeout(() => setStatus("idle"), 2000));
     }, 2000);
@@ -124,17 +124,8 @@ export default function App() {
     const code = syncInput.trim();
     if (!code) return;
     storeSyncCode(code);
+    setReady(false);
     setSyncCode(code);
-    cloudLoading.current = true;
-    setStatus("loading");
-    fetch("/api/load?syncCode=" + encodeURIComponent(code))
-      .then(r => r.json())
-      .then(d => {
-        if (d && typeof d === "object" && Object.keys(d).length > 0) setMonths(d);
-        setStatus("idle");
-      })
-      .catch(() => setStatus("idle"))
-      .finally(() => setTimeout(() => { cloudLoading.current = false; }, 2000));
     setShowSync(false);
   };
 
@@ -142,11 +133,7 @@ export default function App() {
     const empty = { [today]: buildFreshItems(DEFAULT_ITEMS) };
     cloudLoading.current = true;
     setMonths(empty);
-    fetch("/api/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ syncCode, data: empty }),
-    }).finally(() => setTimeout(() => { cloudLoading.current = false; }, 2000));
+    push(syncCode, empty).finally(() => setTimeout(() => { cloudLoading.current = false; }, 2000));
   };
 
   const setItems = (fn) => setMonths(prev => {
@@ -229,7 +216,6 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: "#030712", color: "#f9fafb", fontFamily: "'Inter', system-ui, sans-serif", padding: "16px 12px 40px" }}>
       <div style={{ maxWidth: 600, margin: "0 auto" }}>
-
         <div style={{ marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
             <div>
