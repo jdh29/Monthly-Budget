@@ -150,7 +150,8 @@ export default function App() {
       if (!prev[k]) {
         const keys = Object.keys(prev).sort();
         const last = keys[keys.length - 1];
-        return { ...prev, [k]: last && prev[last] ? rolloverItems(prev[last], DEFAULT_ITEMS) : buildFreshItems(DEFAULT_ITEMS) };
+        return { ...prev, [k]: buildFreshItems(DEFAULT_ITEMS)
+ };
       }
       return prev;
     });
