@@ -72,51 +72,52 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [ready, setReady] = useState(false);
 
-  const cloudLoading = useRef(false);
   const saveTimer = useRef(null);
+  const skipNextSave = useRef(false);
 
   const items = months[monthKey] || buildFreshItems(DEFAULT_ITEMS);
 
   // Load from Supabase whenever syncCode changes (including on first mount), and subscribe to live updates
   useEffect(() => {
+    let cancelled = false;
     if (!syncCode) { setReady(true); return; }
-    cloudLoading.current = true;
+
+    setReady(false);
     setStatus("loading");
+    skipNextSave.current = true; // don't re-save the data we're about to load
+
     pull(syncCode)
       .then(row => {
+        if (cancelled) return;
         if (row && row.data && Object.keys(row.data).length > 0) {
           setMonths(row.data);
         }
         setStatus("idle");
       })
-      .catch(() => setStatus("idle"))
-      .finally(() => {
-        setTimeout(() => {
-          cloudLoading.current = false;
-          setReady(true);
-        }, 2000);
-      });
+      .catch(() => { if (!cancelled) setStatus("idle"); })
+      .finally(() => { if (!cancelled) setReady(true); });
 
     const unsubscribe = subscribeToChanges(syncCode, (remoteData) => {
-      cloudLoading.current = true;
+      skipNextSave.current = true; // this update came FROM the cloud, don't bounce it back
       setMonths(remoteData);
-      setTimeout(() => { cloudLoading.current = false; }, 2000);
     });
-    return unsubscribe;
+
+    return () => { cancelled = true; unsubscribe(); };
   }, [syncCode]);
 
-  // Auto-save: only fires when ready AND not loading from cloud
+  // Auto-save: fires whenever months changes, once ready, unless the change came from the cloud itself
   useEffect(() => {
-    if (!ready || !syncCode || cloudLoading.current) return;
+    if (!ready || !syncCode) return;
+    if (skipNextSave.current) { skipNextSave.current = false; return; }
+
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      if (cloudLoading.current) return;
       setStatus("saving");
       push(syncCode, months)
         .then(() => setStatus("saved"))
         .catch(() => setStatus("error"))
         .finally(() => setTimeout(() => setStatus("idle"), 2000));
-    }, 2000);
+    }, 1200);
     return () => clearTimeout(saveTimer.current);
   }, [months, ready, syncCode]);
 
@@ -124,16 +125,14 @@ export default function App() {
     const code = syncInput.trim();
     if (!code) return;
     storeSyncCode(code);
-    setReady(false);
     setSyncCode(code);
     setShowSync(false);
   };
 
   const wipeAll = () => {
     const empty = { [today]: buildFreshItems(DEFAULT_ITEMS) };
-    cloudLoading.current = true;
     setMonths(empty);
-    push(syncCode, empty).finally(() => setTimeout(() => { cloudLoading.current = false; }, 2000));
+    push(syncCode, empty);
   };
 
   const setItems = (fn) => setMonths(prev => {
